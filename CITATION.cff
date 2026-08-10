@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: >-
+  mlango — a batteries-included framework for machine learning, analytics and LLM agents
+message: >-
+  If you use mlango in work you publish, please cite it using this entry.
+abstract: >-
+  A framework applying Django's declarative philosophy to machine learning. Datasets, models, agents and evaluations are declared as classes; the framework runs, versions and records them, and generates an admin interface, a documented HTTP endpoint, a migration and a CLI target from the same declaration.
+authors:
+  - family-names: Drobyshev
+    given-names: Denis
+repository-code: https://github.com/DrobyshevDev/mlango
+url: https://github.com/DrobyshevDev/mlango
+license: MIT
+keywords:
+  - machine-learning
+  - mlops
+  - framework
+  - llm-agents
+  - experiment-tracking
+  - python
