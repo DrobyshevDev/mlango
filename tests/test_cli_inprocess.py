@@ -916,6 +916,60 @@ class TestDiff:
         )
         assert "No regression" in capsys.readouterr().out
 
+    def test_the_bare_flag_still_means_what_it_meant(self, two_versions, capsys):
+        # It grew an optional mode. The old spelling must not have changed.
+        good, weak = two_versions
+        assert (
+            run("diff", "demo.Sentiment", str(good), str(weak), "-n", "120", "--fail-on-regression")
+            == 1
+        )
+        assert "got right" in capsys.readouterr().err
+
+    def test_significant_mode_blocks_a_real_regression(self, two_versions, capsys):
+        good, weak = two_versions
+        assert (
+            run(
+                "diff",
+                "demo.Sentiment",
+                str(good),
+                str(weak),
+                "-n",
+                "120",
+                "--fail-on-regression",
+                "significant",
+            )
+            == 1
+        )
+        assert "more than chance" in capsys.readouterr().err
+
+    def test_significant_mode_lets_an_improvement_through(self, two_versions, capsys):
+        good, weak = two_versions
+        assert (
+            run(
+                "diff",
+                "demo.Sentiment",
+                str(weak),
+                str(good),
+                "-n",
+                "120",
+                "--fail-on-regression",
+                "significant",
+            )
+            == 0
+        )
+
+    def test_the_report_says_whether_the_balance_is_a_change_or_a_coin(self, two_versions, capsys):
+        good, weak = two_versions
+        assert run("diff", "demo.Sentiment", str(good), str(weak), "-n", "120") == 0
+        assert "verdict" in capsys.readouterr().out
+
+    def test_json_carries_the_significance(self, two_versions, capsys):
+        good, weak = two_versions
+        assert run("diff", "demo.Sentiment", str(good), str(weak), "-n", "80", "--json") == 0
+        stats = json.loads(capsys.readouterr().out)["significance"]
+        assert set(stats) == {"discordant", "p_value", "direction", "verdict"}
+        assert 0.0 <= stats["p_value"] <= 1.0
+
     def test_one_version_number_is_refused(self, two_versions, capsys):
         assert run("diff", "demo.Sentiment", "1") == 1
         assert "two version numbers" in capsys.readouterr().err

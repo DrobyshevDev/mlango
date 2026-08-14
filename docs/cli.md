@@ -223,12 +223,25 @@ Against the labels
   v4 accuracy      0.9020   +0.0180
   fixed          22 row(s) wrong in v3
   broke           4 row(s) right in v3
+  verdict        a real improvement: 22 fixed against 4 broken (p=0.001)
 ```
 
 **`broke`** is the number nobody reports and everybody wants. A promotion that
 improves the average while losing rows that used to work is the kind that gets
 reverted a week later, and `--fail-on-regression` turns it into an exit code you
 can put in front of a promotion.
+
+**`verdict`** answers the question those two counts invite. Rows both versions
+get right say nothing about which is better, and neither do rows both get wrong;
+only the disagreements carry information. So the question is whether a coin that
+came up 22 heads in 26 tosses was fair, which is
+[McNemar's test](https://en.wikipedia.org/wiki/McNemar%27s_test), computed
+exactly rather than by approximation because promotions are usually decided on a
+few hundred rows.
+
+The distinction it draws is the one that matters before a promotion: 200 fixed
+against 3 broken is an improvement, 38 fixed against 40 broken is a coin, and a
+rule that counts broken rows calls both of them a regression.
 
 With no version numbers it compares what is in production against the newest —
 which is the question you have when you are about to promote something.
@@ -240,6 +253,16 @@ which is the question you have when you are about to promote something.
 | `--show-changes N` | Print up to N rows where the two disagree |
 | `--json` | Emit the whole report |
 | `--fail-on-regression` | Exit non-zero if the newer one lost a row the older one got right |
+| `--fail-on-regression significant` | Exit non-zero only when the losses beat the gains by more than chance |
+| `--alpha P` | Significance level for the mode above. Default `0.05` |
+
+```bash
+# A curated regression suite: nothing may be lost.
+python manage.py diff reviews.Sentiment --fail-on-regression
+
+# A real dataset before a promotion: noise may pass, a real loss may not.
+python manage.py diff reviews.Sentiment --fail-on-regression significant
+```
 
 Regression models are compared by distance rather than equality — two float
 predictions are never equal — so the report gives mean and largest delta, and

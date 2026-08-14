@@ -34,11 +34,26 @@ class Command(BaseCommand):
             help="Print up to N rows where the two disagree.",
         )
         parser.add_argument("--json", action="store_true", help="Emit the report as JSON.")
+        # Was a flag; now a flag with an optional mode, so the old spelling
+        # still means what it meant.
         parser.add_argument(
             "--fail-on-regression",
-            action="store_true",
-            help="Exit non-zero if the newer version got any labelled row wrong that "
-            "the older one got right. For CI, before a promotion.",
+            nargs="?",
+            const="any",
+            choices=["any", "significant"],
+            default=None,
+            metavar="MODE",
+            help="Exit non-zero on regression. 'any' (the default when the flag is "
+            "given bare) fails on a single labelled row the newer version lost. "
+            "'significant' fails only when the losses outweigh the gains by more "
+            "than chance, which is the question a promotion actually asks.",
+        )
+        parser.add_argument(
+            "--alpha",
+            type=float,
+            default=None,
+            metavar="P",
+            help="Significance level for --fail-on-regression significant. Default 0.05.",
         )
 
     def handle(self, **options: Any) -> None:
@@ -73,7 +88,10 @@ class Command(BaseCommand):
             self._report(report)
 
         if options["fail_on_regression"]:
-            self._check_regression(report)
+            from mlango.training.comparison import DEFAULT_ALPHA
+
+            alpha = options["alpha"] if options["alpha"] is not None else DEFAULT_ALPHA
+            self._check_regression(report, options["fail_on_regression"], alpha)
 
     # -- selection -----------------------------------------------------------
 
@@ -180,6 +198,7 @@ class Command(BaseCommand):
         if report["task"] == "regression":
             self.write(f"  closer         {report['closer']} row(s)")
             self.write(f"  further        {report['further']} row(s)")
+            self._significance_line(report)
             return
 
         self.write(f"  fixed          {report['fixed']} row(s) wrong in v{report['left']}")
@@ -189,14 +208,46 @@ class Command(BaseCommand):
         broke = report["broke"]
         line = f"  broke          {broke} row(s) right in v{report['left']}"
         self.write(self.style.warn(line) if broke else line)
+        self._significance_line(report)
 
-    def _check_regression(self, report: dict[str, Any]) -> None:
+    def _significance_line(self, report: dict[str, Any]) -> None:
+        """Whether the fixed-against-broken balance is a change or a coin.
+
+        Printed unconditionally, because the counts above invite a conclusion
+        and this is the sentence that says whether the conclusion is available.
+        """
+        stats = report.get("significance")
+        if not stats or not stats["discordant"]:
+            return
+        self.write(f"  verdict        {stats['verdict']}")
+
+    def _check_regression(self, report: dict[str, Any], mode: str, alpha: float) -> None:
         if not report["labelled"]:
             raise CommandError(
                 "--fail-on-regression needs labelled data, and this dataset has none. "
                 "Point --dataset at one that carries the target column."
             )
         broke = report.get("broke", report.get("further", 0))
+
+        if mode == "significant":
+            stats = report.get("significance") or {}
+            if stats.get("direction") == "regression" and stats.get("p_value", 1.0) < alpha:
+                raise CommandError(
+                    f"v{report['right']} is worse than v{report['left']} by more than chance: "
+                    f"{stats['verdict']}. Inspect the rows with: "
+                    f"--show-changes {min(broke, 20)}"
+                )
+            # Losing rows is still worth saying out loud, even when the balance
+            # of the change is favourable or too close to call.
+            if broke:
+                self.write(
+                    f"v{report['right']} lost {broke} row(s), and that is not a "
+                    f"significant regression at alpha={alpha:g}: {stats.get('verdict', '')}"
+                )
+            else:
+                self.ok(f"No regression: v{report['right']} lost nothing v{report['left']} had.")
+            return
+
         if broke:
             raise CommandError(
                 f"v{report['right']} is wrong on {broke} row(s) that v{report['left']} got "

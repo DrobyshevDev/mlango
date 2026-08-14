@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `manage.py diff` now says whether the fixed-against-broken balance is a change
+  or a coin. Only the rows two versions disagree about carry information, so the
+  question is whether a coin that came up `fixed` heads in `fixed + broke`
+  tosses was fair — McNemar's test, computed exactly rather than by
+  approximation, because promotions are usually decided on a few hundred rows.
+- `--fail-on-regression significant` gates on that instead of on any lost row.
+  The strict rule is right for a curated suite where nothing may be lost; on a
+  real dataset it blocks a version that fixed two hundred rows and lost three.
+  The bare `--fail-on-regression` is unchanged and still means "lose nothing".
+  `--alpha` sets the level, default 0.05.
+
+### Fixed
+
+- `startproject` now writes `requirements-dev.txt` and says how to use it. The
+  scaffold ships `tests/test_demo.py` and `manage.py test` runs it, but
+  following the printed steps ended at "pytest is not installed" — pytest cannot
+  go in `requirements.txt`, which the generated Dockerfile installs into the
+  production image.
+- The quickstart CI job installs the built wheel rather than an editable
+  checkout. The editable install meant a module missing from the wheel would
+  still import, and the `dev` extra it pulled in meant `manage.py test` passed
+  there for a reason no user has.
+
 ## 0.2.0 — 2026-07-31
 
 Everything in this release answers a question a project has *after* the model

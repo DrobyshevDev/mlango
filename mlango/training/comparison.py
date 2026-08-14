@@ -13,6 +13,7 @@ versions are registered, the dataset is declared — only for someone to ask.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from mlango.training import metrics as metric_lib
@@ -21,6 +22,72 @@ from mlango.training import metrics as metric_lib
 #: question equality can answer. Anything closer than this counts as the same
 #: prediction, which keeps the changed-row list about real movement.
 DEFAULT_TOLERANCE = 1e-6
+
+#: Below this, a difference is reported as real rather than as noise. Nothing
+#: about 0.05 is principled; it is the number everyone reads without asking, and
+#: the p-value is printed beside the verdict so you can disagree with it.
+DEFAULT_ALPHA = 0.05
+
+
+def significance(fixed: int, broke: int) -> dict[str, Any]:
+    """Is the difference between two versions distinguishable from noise?
+
+    Rows both versions get right, and rows both get wrong, say nothing about
+    which is better — only the disagreements carry information. That leaves
+    ``fixed`` rows the new version rescued and ``broke`` rows it lost, and the
+    question becomes whether a coin that came up ``fixed`` heads in
+    ``fixed + broke`` tosses was fair.
+
+    This is McNemar's test, computed exactly rather than through the chi-square
+    approximation, because promotion decisions are often made on a few hundred
+    rows where the approximation is worst.
+
+    A version that fixes 200 rows and breaks 3 is an improvement; one that fixes
+    38 and breaks 40 is a coin. Both look like "a regression" to a rule that
+    counts broken rows, which is why this exists beside that rule rather than
+    instead of it.
+    """
+    discordant = fixed + broke
+    if discordant == 0:
+        # The two versions are right and wrong on exactly the same rows. There
+        # is no evidence either way, and no amount of data would change that.
+        return {
+            "discordant": 0,
+            "p_value": 1.0,
+            "direction": "identical",
+            "verdict": "the two versions are right on exactly the same rows",
+        }
+
+    smaller = min(fixed, broke)
+    tail = sum(math.comb(discordant, i) for i in range(smaller + 1)) / (2**discordant)
+    p_value = min(1.0, 2 * tail)
+
+    if fixed > broke:
+        direction = "improvement"
+    elif broke > fixed:
+        direction = "regression"
+    else:
+        direction = "tie"
+
+    return {
+        "discordant": discordant,
+        "p_value": p_value,
+        "direction": direction,
+        "verdict": _verdict(direction, p_value, fixed, broke),
+    }
+
+
+def _verdict(direction: str, p_value: float, fixed: int, broke: int) -> str:
+    if direction == "tie":
+        return f"{fixed} fixed against {broke} broken is a coin, not a change"
+    if p_value >= DEFAULT_ALPHA:
+        return (
+            f"{fixed} fixed against {broke} broken is not distinguishable from noise "
+            f"(p={p_value:.3f})"
+        )
+    if direction == "improvement":
+        return f"a real improvement: {fixed} fixed against {broke} broken (p={p_value:.3f})"
+    return f"a real regression: {broke} broken against {fixed} fixed (p={p_value:.3f})"
 
 
 def compare_versions(
@@ -173,12 +240,16 @@ def _against_truth(
         )
         out["closer"] = closer
         out["further"] = further
+        # The same test. "Got closer" and "got further" are the discordant pairs
+        # here, so this is a sign test, which is McNemar's under another name.
+        out["significance"] = significance(closer, further)
         return out
 
     fixed = sum(1 for expected, a, b in zip(truth, left, right, strict=True) if a != expected == b)
     broke = sum(1 for expected, a, b in zip(truth, left, right, strict=True) if b != expected == a)
     out["fixed"] = fixed
     out["broke"] = broke
+    out["significance"] = significance(fixed, broke)
     return out
 
 
