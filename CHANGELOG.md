@@ -18,6 +18,17 @@ All notable changes to this project are documented here. The format follows
   real dataset it blocks a version that fixed two hundred rows and lost three.
   The bare `--fail-on-regression` is unchanged and still means "lose nothing".
   `--alpha` sets the level, default 0.05.
+- `manage.py diff --left URI --right URI --dataset LABEL` compares two models
+  mlango did not train. The comparison never needed a `Model` class — two things
+  that can `predict` and a dataset to score them on is the whole requirement —
+  so this is a way in for a team with artefacts and a CSV who have not adopted
+  anything yet. A plain path is loaded with joblib, falling back to pickle;
+  other schemes come from packages registering under the `mlango.loaders`
+  entry-point group, so a registry client stays in its own package rather than
+  becoming a dependency here.
+- `mlango.training.comparison.compare_predictors` is the seam that made the
+  above possible, and is public: the comparison, given two predictors, with
+  where they came from no longer part of the question.
 
 ### Fixed
 

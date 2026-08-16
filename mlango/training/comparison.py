@@ -106,9 +106,6 @@ def compare_versions(
     disagreement is a disagreement about the data rather than about which rows
     each one happened to see.
     """
-    older = model_class.load(version=left)
-    newer = model_class.load(version=right)
-
     dataset_class = model_class.get_dataset()
     query = queryset if queryset is not None else dataset_class.objects.get_queryset()
     if limit:
@@ -118,23 +115,61 @@ def compare_versions(
     if not records:
         raise LookupError(f"{dataset_class._meta.label} produced no rows to compare.")
 
-    features = model_class.get_features()
+    return compare_predictors(
+        model_class.load(version=left),
+        model_class.load(version=right),
+        records=records,
+        features=model_class.get_features(),
+        task=model_class.get_task(),
+        target=model_class.get_target(dataset_class),
+        label=model_class._meta.label,
+        dataset=dataset_class._meta.label,
+        left=left,
+        right=right,
+        tolerance=tolerance,
+        max_changes=max_changes,
+    )
+
+
+def compare_predictors(
+    older: Any,
+    newer: Any,
+    *,
+    records: list[dict[str, Any]],
+    features: list[str],
+    task: str,
+    target: str | None,
+    label: str,
+    dataset: str,
+    left: Any,
+    right: Any,
+    tolerance: float = DEFAULT_TOLERANCE,
+    max_changes: int = 0,
+) -> dict[str, Any]:
+    """The comparison itself, given two things that can ``predict``.
+
+    Split out from :func:`compare_versions` so that where the two models came
+    from stops being part of the question. Two registered versions are the usual
+    case; a pair of artefacts on disk, or two versions in somebody else's
+    registry, are the same comparison once something can load them.
+
+    Both are run over identical input in the same order, so a disagreement is a
+    disagreement about the data rather than about which rows each one saw.
+    """
     inputs = [_as_input(record, features) for record in records]
 
     left_out = list(older.predict(inputs))
     right_out = list(newer.predict(inputs))
 
-    task = model_class.get_task()
-    target = model_class.get_target(dataset_class)
     truth = [record.get(target) for record in records] if target else []
     labelled = bool(truth) and all(value is not None for value in truth)
 
     report: dict[str, Any] = {
-        "label": model_class._meta.label,
+        "label": label,
         "left": left,
         "right": right,
         "task": task,
-        "dataset": dataset_class._meta.label,
+        "dataset": dataset,
         "rows": len(records),
         "labelled": labelled,
     }

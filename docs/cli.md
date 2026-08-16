@@ -264,6 +264,43 @@ python manage.py diff reviews.Sentiment --fail-on-regression
 python manage.py diff reviews.Sentiment --fail-on-regression significant
 ```
 
+### Models mlango did not train
+
+The comparison does not care where the two models came from — it needs two
+things that can `predict` and a dataset to score them on. So you can point it at
+artefacts you already have, without a `Model` class and without adopting
+anything:
+
+```bash
+python manage.py diff --dataset reviews.Reviews \
+  --left  models/sentiment-v3.joblib \
+  --right models/sentiment-v4.joblib
+```
+
+The dataset is required, because a saved model carries neither the rows to score
+it on nor the column that holds the answer. If you do not have one declared yet,
+`manage.py inspectdata data/rows.csv` writes it from a file.
+
+| Flag | Effect |
+|---|---|
+| `--left URI`, `--right URI` | The two models. A path, or `scheme:reference` |
+| `--task` | `classification` (default) or `regression` |
+| `--target` | Column to score against. Defaults to the dataset's declared target |
+| `--features` | Comma-separated inputs. Defaults to every field but the target and primary key |
+
+A plain path is loaded with joblib, falling back to pickle. Other schemes come
+from packages registering under the `mlango.loaders` entry-point group:
+
+```toml
+[project.entry-points."mlango.loaders"]
+mlflow = "my_package.loaders:load_mlflow_model"
+```
+
+The function takes the part after the scheme — `models:/Sentiment/3` for
+`mlflow:models:/Sentiment/3` — and returns anything with a `predict` method.
+Registry clients live in those packages rather than here, because a framework
+that installs somebody else's SDK to read one file is not one you want.
+
 Regression models are compared by distance rather than equality — two float
 predictions are never equal — so the report gives mean and largest delta, and
 counts rows that got closer to the truth against rows that got further away.

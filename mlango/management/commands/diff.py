@@ -17,7 +17,12 @@ class Command(BaseCommand):
     help = "Compare what two registered model versions predict on the same data."
 
     def add_arguments(self, parser) -> None:
-        parser.add_argument("model", help="Model label, e.g. reviews.Sentiment.")
+        parser.add_argument(
+            "model",
+            nargs="?",
+            help="Model label, e.g. reviews.Sentiment. Omit when comparing "
+            "artefacts with --left and --right.",
+        )
         parser.add_argument(
             "versions",
             nargs="*",
@@ -25,6 +30,30 @@ class Command(BaseCommand):
             help="Two version numbers. Omit to compare production against the newest.",
         )
         parser.add_argument("--dataset", help="Score this dataset instead of the declared one.")
+
+        # Comparing two things mlango did not train. Same question, same report;
+        # only where the models come from differs.
+        parser.add_argument(
+            "--left",
+            metavar="URI",
+            help="Path to a saved model, or scheme:reference, to compare as the "
+            "older side. Requires --right and --dataset.",
+        )
+        parser.add_argument("--right", metavar="URI", help="The newer side. See --left.")
+        parser.add_argument(
+            "--task",
+            choices=["classification", "regression"],
+            default="classification",
+            help="How to read the predictions of external models. Default classification.",
+        )
+        parser.add_argument(
+            "--target", help="Column to score against. Defaults to the dataset's declared target."
+        )
+        parser.add_argument(
+            "--features",
+            help="Comma-separated columns to feed the models. Defaults to every "
+            "field except the target and the primary key.",
+        )
         parser.add_argument("-n", "--limit", type=int, help="Stop after this many rows.")
         parser.add_argument(
             "--show-changes",
@@ -61,22 +90,30 @@ class Command(BaseCommand):
         from mlango.core.registry import apps
         from mlango.training.comparison import compare_versions
 
-        model_class = apps.get_model(options["model"])
-        left, right = self._versions(model_class, options["versions"])
-
-        queryset = None
-        if options["dataset"]:
-            queryset = apps.get_dataset(options["dataset"]).objects.get_queryset()
-
         try:
-            report = compare_versions(
-                model_class,
-                left,
-                right,
-                queryset=queryset,
-                limit=options.get("limit"),
-                max_changes=options["show_changes"],
-            )
+            if options["left"] or options["right"]:
+                report = self._external_report(options)
+            else:
+                if not options["model"]:
+                    raise CommandError(
+                        "Name a model to compare its registered versions, or pass "
+                        "--left and --right to compare two saved artefacts."
+                    )
+                model_class = apps.get_model(options["model"])
+                left, right = self._versions(model_class, options["versions"])
+
+                queryset = None
+                if options["dataset"]:
+                    queryset = apps.get_dataset(options["dataset"]).objects.get_queryset()
+
+                report = compare_versions(
+                    model_class,
+                    left,
+                    right,
+                    queryset=queryset,
+                    limit=options.get("limit"),
+                    max_changes=options["show_changes"],
+                )
         except LookupError as exc:
             raise CommandError(str(exc)) from exc
         except MlangoError as exc:
@@ -92,6 +129,55 @@ class Command(BaseCommand):
 
             alpha = options["alpha"] if options["alpha"] is not None else DEFAULT_ALPHA
             self._check_regression(report, options["fail_on_regression"], alpha)
+
+    def _external_report(self, options: dict[str, Any]) -> dict[str, Any]:
+        """Compare two artefacts mlango did not train.
+
+        The dataset is required here because nothing else can say what rows to
+        score or which column is the answer — a saved model carries neither.
+        """
+        from mlango.core.registry import apps
+        from mlango.training.comparison import compare_predictors
+        from mlango.training.external import columns_for, load_predictor
+
+        if not (options["left"] and options["right"]):
+            raise CommandError("--left and --right go together; a diff needs two sides.")
+        if not options["dataset"]:
+            raise CommandError(
+                "--left and --right need --dataset: a saved model does not carry "
+                "the rows to score it on. Declare one, or generate it from a file "
+                "with: manage.py inspectdata data/rows.csv"
+            )
+
+        dataset_class = apps.get_dataset(options["dataset"])
+        declared = [name.strip() for name in (options["features"] or "").split(",") if name.strip()]
+        features, target = columns_for(
+            dataset_class,
+            features=declared or None,
+            target=options["target"],
+        )
+
+        query = dataset_class.objects.get_queryset()
+        if options.get("limit"):
+            query = query.take(options["limit"])
+        records = [dict(record) for record in query]
+        if not records:
+            raise LookupError(f"{dataset_class._meta.label} produced no rows to compare.")
+
+        return compare_predictors(
+            load_predictor(options["left"]),
+            load_predictor(options["right"]),
+            records=records,
+            features=features,
+            task=options["task"],
+            target=target,
+            # No label: the two URIs in the heading already say what this is.
+            label="",
+            dataset=dataset_class._meta.label,
+            left=options["left"],
+            right=options["right"],
+            max_changes=options["show_changes"],
+        )
 
     # -- selection -----------------------------------------------------------
 
@@ -145,12 +231,18 @@ class Command(BaseCommand):
     # -- output --------------------------------------------------------------
 
     def _report(self, report: dict[str, Any]) -> None:
-        self.write(
-            self.style.bold(
-                f"{report['label']} v{report['left']} → v{report['right']} "
-                f"on {report['rows']} rows of {report['dataset']}"
+        # Registered versions are numbers and read as "v3"; artefacts are URIs
+        # and read as themselves. Both are "the older side" and "the newer one".
+        heading = " ".join(
+            part
+            for part in (
+                report["label"],
+                f"{_side(report['left'])} → {_side(report['right'])}",
+                f"on {report['rows']} rows of {report['dataset']}",
             )
+            if part
         )
+        self.write(self.style.bold(heading))
         self.write("")
 
         agreement = report["agreement"]
@@ -192,8 +284,11 @@ class Command(BaseCommand):
 
         self.write("")
         self.write(self.style.bold("Against the labels"))
-        self.write(f"  v{report['left']} {key:<12} {left:.4f}")
-        self.write(f"  v{report['right']} {key:<12} {right:.4f}   {delta:+.4f}")
+        # Width chosen so `v3` and a file path both leave the metric aligned.
+        older, newer = _side(report["left"]), _side(report["right"])
+        width = max(len(older), len(newer), 6)
+        self.write(f"  {older:<{width}} {key:<12} {left:.4f}")
+        self.write(f"  {newer:<{width}} {key:<12} {right:.4f}   {delta:+.4f}")
 
         if report["task"] == "regression":
             self.write(f"  closer         {report['closer']} row(s)")
@@ -201,12 +296,12 @@ class Command(BaseCommand):
             self._significance_line(report)
             return
 
-        self.write(f"  fixed          {report['fixed']} row(s) wrong in v{report['left']}")
+        self.write(f"  fixed          {report['fixed']} row(s) wrong in {_side(report['left'])}")
         # The number nobody reports and everybody wants: a promotion that
         # improves the average while losing rows that used to work is exactly
         # the kind that gets reverted a week later.
         broke = report["broke"]
-        line = f"  broke          {broke} row(s) right in v{report['left']}"
+        line = f"  broke          {broke} row(s) right in {_side(report['left'])}"
         self.write(self.style.warn(line) if broke else line)
         self._significance_line(report)
 
@@ -233,7 +328,7 @@ class Command(BaseCommand):
             stats = report.get("significance") or {}
             if stats.get("direction") == "regression" and stats.get("p_value", 1.0) < alpha:
                 raise CommandError(
-                    f"v{report['right']} is worse than v{report['left']} by more than chance: "
+                    f"{_side(report['right'])} is worse than {_side(report['left'])} by more than chance: "
                     f"{stats['verdict']}. Inspect the rows with: "
                     f"--show-changes {min(broke, 20)}"
                 )
@@ -241,21 +336,30 @@ class Command(BaseCommand):
             # of the change is favourable or too close to call.
             if broke:
                 self.write(
-                    f"v{report['right']} lost {broke} row(s), and that is not a "
+                    f"{_side(report['right'])} lost {broke} row(s), and that is not a "
                     f"significant regression at alpha={alpha:g}: {stats.get('verdict', '')}"
                 )
             else:
-                self.ok(f"No regression: v{report['right']} lost nothing v{report['left']} had.")
+                self.ok(
+                    f"No regression: {_side(report['right'])} lost nothing {_side(report['left'])} had."
+                )
             return
 
         if broke:
             raise CommandError(
-                f"v{report['right']} is wrong on {broke} row(s) that v{report['left']} got "
+                f"{_side(report['right'])} is wrong on {broke} row(s) that {_side(report['left'])} got "
                 f"right. Inspect them with: --show-changes {min(broke, 20)}"
             )
-        self.ok(f"No regression: v{report['right']} keeps everything v{report['left']} got right.")
+        self.ok(
+            f"No regression: {_side(report['right'])} keeps everything {_side(report['left'])} got right."
+        )
 
 
 def _short(value: Any, length: int = 40) -> str:
     text = "" if value is None else str(value)
     return text if len(text) <= length else text[: length - 1] + "…"
+
+
+def _side(value: Any) -> str:
+    """A registered version reads as `v3`; an artefact reads as its URI."""
+    return f"v{value}" if isinstance(value, int) else str(value)

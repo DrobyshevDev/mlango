@@ -999,6 +999,130 @@ class TestDiff:
         assert "999" in capsys.readouterr().err
 
 
+class TestDiffOnArtefactsMlangoDidNotTrain:
+    """The door: two saved models and a declared dataset, no Model class.
+
+    The comparison is the same comparison — only where the two sides came from
+    differs — so this proves the seam, not the statistics.
+    """
+
+    @pytest.fixture(scope="module")
+    def two_artefacts(self, live_trained, tmp_path_factory):
+        import pickle
+
+        directory = tmp_path_factory.mktemp("artefacts")
+
+        class Constant:
+            def __init__(self, answer):
+                self.answer = answer
+
+            def predict(self, inputs):
+                return [self.answer for _ in inputs]
+
+        # Module-level so pickle can find it again on load.
+        globals()["_ConstantPredictor"] = Constant
+        Constant.__module__ = __name__
+        Constant.__qualname__ = "_ConstantPredictor"
+
+        paths = []
+        for answer in ("positive", "negative"):
+            path = directory / f"{answer}.pkl"
+            with path.open("wb") as handle:
+                pickle.dump(Constant(answer), handle)
+            paths.append(str(path))
+        return paths
+
+    def test_it_compares_two_files(self, two_artefacts, capsys):
+        left, right = two_artefacts
+        assert (
+            run("diff", "--dataset", "demo.Reviews", "--left", left, "--right", right, "-n", "40")
+            == 0
+        )
+        out = capsys.readouterr().out
+        # Two constant predictors that never agree: nothing matches, everything moved.
+        assert "agreement      0.0%" in out
+        assert "demo.Reviews" in out
+        assert left in out and right in out
+
+    def test_a_uri_is_never_printed_as_a_version_number(self, two_artefacts, capsys):
+        # Found by running it rather than by testing it: the report prefixed
+        # every side with `v`, which reads as `vmodel.pkl`. Registered versions
+        # still read as `v3`; a path reads as itself, everywhere it appears.
+        left, right = two_artefacts
+        assert run(
+            "diff",
+            "--dataset",
+            "demo.Reviews",
+            "--left",
+            left,
+            "--right",
+            right,
+            "-n",
+            "40",
+            "--fail-on-regression",
+            "significant",
+        ) in (0, 1)
+        printed = capsys.readouterr()
+        assert "v" + left not in printed.out + printed.err
+        assert "v" + right not in printed.out + printed.err
+
+    def test_the_report_carries_the_same_verdict(self, two_artefacts, capsys):
+        left, right = two_artefacts
+        assert (
+            run(
+                "diff",
+                "--dataset",
+                "demo.Reviews",
+                "--left",
+                left,
+                "--right",
+                right,
+                "-n",
+                "40",
+                "--json",
+            )
+            == 0
+        )
+        report = json.loads(capsys.readouterr().out)
+        assert report["labelled"] is True
+        assert set(report["significance"]) == {"discordant", "p_value", "direction", "verdict"}
+
+    def test_the_gate_works_on_artefacts_too(self, two_artefacts, capsys):
+        left, right = two_artefacts
+        code = run(
+            "diff",
+            "--dataset",
+            "demo.Reviews",
+            "--left",
+            left,
+            "--right",
+            right,
+            "-n",
+            "40",
+            "--fail-on-regression",
+            "significant",
+        )
+        # Which side wins depends on the label balance; either way the gate ran
+        # and said something about it rather than crashing.
+        assert code in (0, 1)
+
+    def test_one_side_alone_is_refused(self, live_trained, capsys):
+        assert run("diff", "--left", "a.pkl") == 1
+        assert "go together" in capsys.readouterr().err
+
+    def test_without_a_dataset_it_says_where_to_get_one(self, live_trained, capsys):
+        assert run("diff", "--left", "a.pkl", "--right", "b.pkl") == 1
+        err = capsys.readouterr().err
+        assert "--dataset" in err
+        assert "inspectdata" in err
+
+    def test_no_model_and_no_artefacts_explains_both_ways_in(self, live_trained, capsys):
+        assert run("diff") == 1
+        err = capsys.readouterr().err
+        assert "Name a model" in err
+        assert "--left" in err
+
+
 def _newest_version(label: str) -> int:
     import sqlalchemy as sa
 
