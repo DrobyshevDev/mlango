@@ -31,6 +31,22 @@ class Command(BaseCommand):
         )
         parser.add_argument("--dataset", help="Score this dataset instead of the declared one.")
 
+        # An agent has no version number, so the pair to compare is two runs of
+        # its evaluation suite. Same question, same arithmetic, different rows.
+        parser.add_argument(
+            "--eval",
+            metavar="LABEL",
+            dest="eval_label",
+            help="Compare two runs of an evaluation suite instead of two model "
+            "versions, e.g. support.AnswerQuality.",
+        )
+        parser.add_argument(
+            "--runs",
+            nargs=2,
+            metavar=("OLDER", "NEWER"),
+            help="Which two evaluation runs. Defaults to the two most recent.",
+        )
+
         # Comparing two things mlango did not train. Same question, same report;
         # only where the models come from differs.
         parser.add_argument(
@@ -91,7 +107,9 @@ class Command(BaseCommand):
         from mlango.training.comparison import compare_versions
 
         try:
-            if options["left"] or options["right"]:
+            if options["eval_label"]:
+                report = self._eval_report(options)
+            elif options["left"] or options["right"]:
                 report = self._external_report(options)
             else:
                 if not options["model"]:
@@ -129,6 +147,48 @@ class Command(BaseCommand):
 
             alpha = options["alpha"] if options["alpha"] is not None else DEFAULT_ALPHA
             self._check_regression(report, options["fail_on_regression"], alpha)
+
+    def _eval_report(self, options: dict[str, Any]) -> dict[str, Any]:
+        """Diff two runs of an evaluation suite.
+
+        The per-case results were already stored by ``manage.py evaluate``; this
+        only has to find the two runs and join them.
+        """
+        from mlango.core.registry import apps
+        from mlango.evals.comparison import compare_runs, recent_runs
+        from mlango.training.run import get_run
+
+        if options["left"] or options["right"]:
+            raise CommandError("--eval compares evaluation runs; --left and --right compare files.")
+
+        label = apps.get_eval(options["eval_label"])._meta.label
+
+        if options["runs"]:
+            runs = []
+            for reference in options["runs"]:
+                run = get_run(reference)
+                if run is None:
+                    raise CommandError(f"No run matches {reference!r}.")
+                if run.target != label:
+                    raise CommandError(f"Run {reference} evaluated {run.target!r}, not {label!r}.")
+                runs.append(run)
+            older, newer = runs
+        else:
+            found = recent_runs(label, limit=2)
+            if len(found) < 2:
+                raise CommandError(
+                    f"{label} has {len(found)} finished run(s); comparing needs two. "
+                    f"Run it again: manage.py evaluate {label}"
+                )
+            # recent_runs is newest first, and the older one is the baseline.
+            newer, older = found
+
+        return compare_runs(
+            older,
+            newer,
+            max_changes=options["show_changes"],
+            alpha=options["alpha"] if options["alpha"] is not None else _default_alpha(),
+        )
 
     def _external_report(self, options: dict[str, Any]) -> dict[str, Any]:
         """Compare two artefacts mlango did not train.
@@ -231,6 +291,10 @@ class Command(BaseCommand):
     # -- output --------------------------------------------------------------
 
     def _report(self, report: dict[str, Any]) -> None:
+        if report.get("kind") == "eval":
+            self._eval_report_lines(report)
+            return
+
         # Registered versions are numbers and read as "v3"; artefacts are URIs
         # and read as themselves. Both are "the older side" and "the newer one".
         heading = " ".join(
@@ -270,6 +334,53 @@ class Command(BaseCommand):
         if report.get("changes"):
             self.write("")
             self.write(self.style.bold("Rows where they disagree"))
+            columns = list(report["changes"][0])
+            self.table(
+                columns, [[_short(row.get(c)) for c in columns] for row in report["changes"]]
+            )
+
+    def _eval_report_lines(self, report: dict[str, Any]) -> None:
+        """The same report, for a suite whose cases pass or fail rather than score."""
+        self.write(
+            self.style.bold(
+                f"{report['label']} {report['left']} → {report['right']} "
+                f"on {report['cases']} shared case(s)"
+            )
+        )
+        self.write("")
+
+        rates = report["pass_rate"]
+        width = max(len(report["left"]), len(report["right"]), 6)
+        self.write(f"  {report['left']:<{width}} pass rate    {rates['left']:.4f}")
+        self.write(
+            f"  {report['right']:<{width}} pass rate    {rates['right']:.4f}   {rates['delta']:+.4f}"
+        )
+        self.write(f"  fixed          {report['fixed']} case(s) failing in {report['left']}")
+        broke = report["broke"]
+        line = f"  broke          {broke} case(s) passing in {report['left']}"
+        self.write(self.style.warn(line) if broke else line)
+        self._significance_line(report)
+
+        # A case that answers differently and still passes is worth knowing about
+        # for an agent, where the wording is half the product.
+        reworded = report["changed"] - report["fixed"] - report["broke"]
+        if reworded > 0:
+            self.write(
+                self.style.dim(
+                    f"  reworded       {reworded} case(s) answered differently and still passed"
+                )
+            )
+
+        for side, cases in (("older", report["only_left"]), ("newer", report["only_right"])):
+            if cases:
+                # Never folded into the totals: a suite that grew is a different
+                # suite, and that is how a pass rate improves by adding easy cases.
+                shown = ", ".join(cases[:5]) + ("…" if len(cases) > 5 else "")
+                self.warn(f"  {len(cases)} case(s) only in the {side} run: {shown}")
+
+        if report.get("changes"):
+            self.write("")
+            self.write(self.style.bold("Cases that moved"))
             columns = list(report["changes"][0])
             self.table(
                 columns, [[_short(row.get(c)) for c in columns] for row in report["changes"]]
@@ -317,11 +428,15 @@ class Command(BaseCommand):
         self.write(f"  verdict        {stats['verdict']}")
 
     def _check_regression(self, report: dict[str, Any], mode: str, alpha: float) -> None:
-        if not report["labelled"]:
+        # An evaluation is labelled by construction — a case that cannot pass or
+        # fail is not a case — so only a model diff can be missing its truth.
+        evaluation = report.get("kind") == "eval"
+        if not evaluation and not report["labelled"]:
             raise CommandError(
                 "--fail-on-regression needs labelled data, and this dataset has none. "
                 "Point --dataset at one that carries the target column."
             )
+        unit = "case" if evaluation else "row"
         broke = report.get("broke", report.get("further", 0))
 
         if mode == "significant":
@@ -329,14 +444,14 @@ class Command(BaseCommand):
             if stats.get("direction") == "regression" and stats.get("p_value", 1.0) < alpha:
                 raise CommandError(
                     f"{_side(report['right'])} is worse than {_side(report['left'])} by more than chance: "
-                    f"{stats['verdict']}. Inspect the rows with: "
+                    f"{stats['verdict']}. Inspect them with: "
                     f"--show-changes {min(broke, 20)}"
                 )
             # Losing rows is still worth saying out loud, even when the balance
             # of the change is favourable or too close to call.
             if broke:
                 self.write(
-                    f"{_side(report['right'])} lost {broke} row(s), and that is not a "
+                    f"{_side(report['right'])} lost {broke} {unit}(s), and that is not a "
                     f"significant regression at alpha={alpha:g}: {stats.get('verdict', '')}"
                 )
             else:
@@ -347,12 +462,18 @@ class Command(BaseCommand):
 
         if broke:
             raise CommandError(
-                f"{_side(report['right'])} is wrong on {broke} row(s) that {_side(report['left'])} got "
+                f"{_side(report['right'])} is wrong on {broke} {unit}(s) that {_side(report['left'])} got "
                 f"right. Inspect them with: --show-changes {min(broke, 20)}"
             )
         self.ok(
             f"No regression: {_side(report['right'])} keeps everything {_side(report['left'])} got right."
         )
+
+
+def _default_alpha() -> float:
+    from mlango.core.stats import DEFAULT_ALPHA
+
+    return DEFAULT_ALPHA
 
 
 def _short(value: Any, length: int = 40) -> str:

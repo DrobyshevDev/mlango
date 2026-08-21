@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `manage.py diff --eval LABEL` compares two runs of an evaluation suite, case by
+  case. An agent has no version number, so the promotion question — did this
+  change break anything that used to work — had no answer on that half of the
+  framework, though the per-case results were already stored. Cases are joined
+  on `case_id`; `fixed` and `broke` are counted separately, the McNemar verdict
+  says whether the balance is a change or a coin, and `--fail-on-regression`
+  gates a prompt change the way it already gates a promotion. Cases present in
+  only one run are named rather than folded into the totals, because a suite
+  that grew is a different suite.
+- `reworded` counts cases that still pass and answer differently — nothing for a
+  classifier, half the product for something whose output a person reads.
+- `mlango.core.stats.significance` is where McNemar's test now lives, because
+  evaluations ask it too and may not import `training`. It is still re-exported
+  from `mlango.training.comparison`.
 - `manage.py diff` now says whether the fixed-against-broken balance is a change
   or a coin. Only the rows two versions disagree about carry information, so the
   question is whether a coin that came up `fixed` heads in `fixed + broke`

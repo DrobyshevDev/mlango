@@ -312,6 +312,55 @@ This one is not in the admin, and that is deliberate: it loads two models and
 scores a dataset, which belongs behind a command you chose to run rather than a
 page that loads when you click a link.
 
+### Diffing two evaluation runs
+
+An agent has no version number. You change a prompt, a tool description or a
+model, re-run the suite, and the only thing that moves is a pass rate — which
+hides exactly what an accuracy hides: some of the cases that used to pass now do
+not, and they are usually the ones somebody complained about.
+
+The per-case results are already stored, so this joins two runs on `case_id`:
+
+```bash
+python manage.py diff --eval support.AnswerQuality
+python manage.py diff --eval support.AnswerQuality --runs 7c8f1020 c089b7e6
+python manage.py diff --eval support.AnswerQuality --show-changes 20
+python manage.py diff --eval support.AnswerQuality --fail-on-regression significant
+```
+
+```
+support.AnswerQuality 7c8f1020 → c089b7e6 on 120 shared case(s)
+
+  7c8f1020 pass rate    0.8250
+  c089b7e6 pass rate    0.8667   +0.0417
+  fixed          7 case(s) failing in 7c8f1020
+  broke          2 case(s) passing in 7c8f1020
+  verdict        7 fixed against 2 broken is not distinguishable from noise (p=0.180)
+  reworded       11 case(s) answered differently and still passed
+```
+
+With no `--runs`, the two most recent finished runs of that suite are compared.
+
+**`reworded`** is the line that only matters for an agent: cases that still pass
+but answer differently. For a classifier that is nothing; for something whose
+output a person reads, half the product just changed without failing a test.
+
+Cases present in only one of the runs are **named, never absorbed**. A suite
+that grew between the two runs is a different suite, and quietly folding the new
+cases into the totals is how a pass rate improves by adding easy questions.
+
+| Flag | Effect |
+|---|---|
+| `--runs OLDER NEWER` | Which two runs. Defaults to the two most recent |
+| `--show-changes N` | Print up to N cases, those whose verdict moved first |
+| `--json` | Emit the whole report |
+| `--fail-on-regression [any\|significant]` | Exit non-zero. Same rule as for models |
+| `--alpha P` | Significance level. Default 0.05 |
+
+The verdict line is the same McNemar test a model diff uses, for the same
+reason: seven fixed against two broken on a suite of 120 is not evidence, and a
+gate that treats it as evidence will be turned off within a month.
+
 ### Watching for drift
 
 Whether the input has moved away from what a version was trained on. Reads the

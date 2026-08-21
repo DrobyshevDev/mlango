@@ -1137,6 +1137,86 @@ def _newest_version(label: str) -> int:
         )
 
 
+class TestDiffEval:
+    """``diff --eval`` — the same question, for a suite that has no version number."""
+
+    @pytest.fixture
+    def two_eval_runs(self, live_trained):
+        """Two finished runs of the shipped suite, so there is a pair to diff."""
+        assert run("evaluate", "demo.SentimentAccuracy", "-v", "0") == 0
+        assert run("evaluate", "demo.SentimentAccuracy", "-v", "0") == 0
+        return live_trained
+
+    def test_it_compares_the_two_most_recent_runs(self, two_eval_runs, capsys):
+        assert run("diff", "--eval", "demo.SentimentAccuracy") == 0
+        out = capsys.readouterr().out
+        assert "demo.SentimentAccuracy" in out
+        assert "pass rate" in out
+        assert "fixed" in out and "broke" in out
+
+    def test_json_carries_the_whole_report(self, two_eval_runs, capsys):
+        assert run("diff", "--eval", "demo.SentimentAccuracy", "--json") == 0
+        report = json.loads(capsys.readouterr().out)
+        assert report["kind"] == "eval"
+        assert set(report) >= {
+            "cases",
+            "fixed",
+            "broke",
+            "pass_rate",
+            "agreement",
+            "significance",
+            "only_left",
+            "only_right",
+        }
+
+    def test_named_runs_are_used_when_given(self, two_eval_runs, capsys):
+        from mlango.evals.comparison import recent_runs
+
+        newer, older = recent_runs("demo.SentimentAccuracy", limit=2)
+        assert (
+            run("diff", "--eval", "demo.SentimentAccuracy", "--runs", older.uuid, newer.uuid) == 0
+        )
+        out = capsys.readouterr().out
+        assert f"{older.short_id} \u2192 {newer.short_id}" in out
+
+    def test_a_run_of_another_suite_is_refused(self, two_eval_runs, capsys):
+        """Joining two different suites by case id would compare nothing real."""
+        from mlango.evals.comparison import recent_runs
+        from mlango.training.run import recent_runs as recent_any
+
+        newer, older = recent_runs("demo.SentimentAccuracy", limit=2)
+        training = [r for r in recent_any(limit=25) if r.kind == "train"][0]
+
+        assert (
+            run("diff", "--eval", "demo.SentimentAccuracy", "--runs", training.uuid, newer.uuid)
+            == 1
+        )
+        assert "not" in capsys.readouterr().err
+
+    def test_an_unknown_suite_names_what_is_registered(self, live_trained, capsys):
+        assert run("diff", "--eval", "demo.Nope") == 1
+        err = capsys.readouterr().err
+        assert "demo.Nope" in err
+        assert "demo.SentimentAccuracy" in err, "the error should list the real ones"
+
+    def test_it_does_not_mix_with_the_artefact_mode(self, two_eval_runs, capsys):
+        assert run("diff", "--eval", "demo.SentimentAccuracy", "--left", "a.joblib") == 1
+        assert "--left" in capsys.readouterr().err
+
+    def test_fail_on_regression_passes_when_nothing_moved(self, two_eval_runs, capsys):
+        """The shipped model is deterministic, so two runs agree case for case."""
+        assert run("diff", "--eval", "demo.SentimentAccuracy", "--fail-on-regression") == 0
+        assert "No regression" in capsys.readouterr().out
+
+    def test_the_gate_speaks_in_cases_not_rows(self, two_eval_runs, capsys):
+        assert (
+            run("diff", "--eval", "demo.SentimentAccuracy", "--fail-on-regression", "significant")
+            == 0
+        )
+        out = capsys.readouterr().out
+        assert "row(s)" not in out
+
+
 class TestTestCommand:
     def test_a_scaffolded_project_is_green_before_it_is_edited(self, live_project, capsys):
         """startproject ships tests, and they must pass on a fresh checkout."""
