@@ -111,6 +111,38 @@ nothing at exactly the moment worth catching.
   run: python manage.py drift reviews.Sentiment --since 24h --fail-on significant
 ```
 
+## OpenTelemetry
+
+mlango keeps its own record of every run, trace and span, and the admin reads
+that. This is the bridge for organisations that already have somewhere to look:
+
+```bash
+pip install "mlango[otel]"
+```
+
+```python title="myproject/settings.py"
+TELEMETRY = {"ENABLED": True, "SERVICE_NAME": "reviews-api"}
+```
+
+Training runs, agent loops and every tool call are then emitted as spans, with
+mlango's own attributes namespaced (`mlango.target`, `mlango.run`,
+`mlango.status`, `mlango.step`) so they are findable in a view holding spans
+from a dozen libraries. A training run started by an HTTP request appears as a
+child of that request, which is the whole point.
+
+**mlango configures no exporter.** No endpoint, no sampler, no headers. The
+process does that, the way every other OpenTelemetry-instrumented library
+expects — usually a few lines at start-up or the `opentelemetry-instrument`
+launcher. Owning that configuration would mean owning a second, worse copy of
+the SDK's own settings.
+
+**It cannot fail your work.** A collector that is down, an exporter that raises,
+a tracer that explodes: all of it is logged at debug and the run continues.
+Telemetry describes the work; it does not get to fail it.
+
+Nothing is emitted with the setting off, and the dependency is optional — with
+`opentelemetry-api` absent the setting warns once and every span is a no-op.
+
 ## What this is not
 
 It is not a monitoring product, and it does not try to be. There are no alerts,

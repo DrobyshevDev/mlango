@@ -80,6 +80,7 @@ pip install "mlango[s3]"
 | `DEFAULT_CALLBACKS` | `[]` | Колбэки, добавляемые к каждому запуску |
 | `PREDICTION_LOG` | выключено | Что обслуживаемая модель записывает о запросах |
 | `SHADOW` | выключено | Прогонять кандидата рядом с обслуживающей версией |
+| `TELEMETRY` | выключено | Отдавать спаны OpenTelemetry для ранов и циклов агентов |
 
 ```python
 TRAINERS = {"lightgbm": "myproject.trainers.LightGBMTrainer"}

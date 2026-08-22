@@ -17,6 +17,12 @@ All notable changes to this project are documented here. The format follows
   gates a prompt change the way it already gates a promotion. Cases present in
   only one run are named rather than folded into the totals, because a suite
   that grew is a different suite.
+- **OpenTelemetry** (`pip install "mlango[otel]"`). With `TELEMETRY` on,
+  training runs, agent loops and tool calls are emitted as spans, namespaced so
+  they are findable beside a dozen other libraries — a run started by an HTTP
+  request shows up as a child of that request. mlango configures no exporter:
+  the process does that, as every other instrumented library expects. Optional,
+  silent by default, and incapable of failing the work it describes.
 - **Shadow deployment.** With `SHADOW` on, every request is answered twice:
   production replies to the caller and the candidate at `staging` runs on the
   same input, both logged against one request id. `manage.py diff A B --from-log`

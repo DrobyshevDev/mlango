@@ -123,6 +123,18 @@ AGENT_MAX_STEPS: int = 12
 #: Record every LLM call and tool call as spans in the metastore.
 TRACING: bool = True
 
+#: Emit OpenTelemetry spans for training runs, agent loops and tool calls, so
+#: they land in the same trace view as the request that started them.
+#:
+#: Off by default, and mlango never configures an exporter: the process does
+#: that, the way every other OTel-instrumented library expects. Needs
+#: ``pip install "mlango[otel]"``; without it the setting warns once and
+#: nothing is emitted.
+TELEMETRY: dict[str, object] = {
+    "ENABLED": False,
+    "SERVICE_NAME": "mlango",
+}
+
 # --- Admin & serving --------------------------------------------------------
 
 ADMIN_ENABLED: bool = True

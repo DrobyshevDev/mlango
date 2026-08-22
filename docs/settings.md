@@ -80,6 +80,7 @@ profiles all work and mlango never handles a secret it does not have to. Point
 | `DEFAULT_CALLBACKS` | `[]` | Callbacks appended to every run |
 | `PREDICTION_LOG` | off | What a served model records about its requests |
 | `SHADOW` | off | Run a candidate version beside the served one |
+| `TELEMETRY` | off | Emit OpenTelemetry spans for runs and agent loops |
 
 ```python
 TRAINERS = {"lightgbm": "myproject.trainers.LightGBMTrainer"}

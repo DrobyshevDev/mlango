@@ -22,6 +22,7 @@ import traceback
 from collections.abc import Iterator
 from typing import Any
 
+from mlango.core import telemetry
 from mlango.core.serialization import jsonable
 from mlango.core.signals import metric_logged, run_failed, run_finished, run_started
 from mlango.metastore.models import Artifact, Metric, Run, RunStatus, utcnow
@@ -36,9 +37,22 @@ FLUSH_EVERY = 200
 class RunContext:
     """A live run. Use :meth:`start` or the ``with`` form."""
 
-    def __init__(self, run_id: int, uuid: str, *, autoflush: int = FLUSH_EVERY):
+    def __init__(
+        self,
+        run_id: int,
+        uuid: str,
+        *,
+        autoflush: int = FLUSH_EVERY,
+        kind: str = "",
+        target: str = "",
+    ):
         self.run_id = run_id
         self.uuid = uuid
+        #: Kept on the context as well as the row so telemetry can name the
+        #: span without a query, and so status is readable after finish().
+        self.kind = kind
+        self.target = target
+        self.status = RunStatus.RUNNING
         self.autoflush = autoflush
         self._buffer: list[dict[str, Any]] = []
         self._step = 0
@@ -82,7 +96,7 @@ class RunContext:
             session.flush()
             run_id, run_uuid = run.id, run.uuid
 
-        context = cls(run_id, run_uuid)
+        context = cls(run_id, run_uuid, kind=kind, target=target)
         run_started.send(sender=None, run=context)
         logger.info("Run %s started (%s: %s)", run_uuid[:8], kind, target)
         return context
@@ -220,6 +234,7 @@ class RunContext:
                 if error:
                     run.error = error
         self._finished = True
+        self.status = status
         run_finished.send(sender=None, run=self, status=status)
         logger.info("Run %s %s in %.2fs", self.uuid[:8], status, duration)
 
@@ -231,18 +246,33 @@ class RunContext:
     # -- context manager -----------------------------------------------------
 
     def __enter__(self) -> RunContext:
+        # A training run is a unit of work with a start, an end and a status,
+        # which is exactly what a span is. Entered here so it closes on the way
+        # out whichever way the run ends.
+        span = telemetry.span(
+            f"mlango.{self.kind or 'run'}", target=self.target, run=self.uuid, kind=self.kind
+        )
+        self._span: Any = span
+        self._span_scope: Any = span.__enter__()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         # Returning None (never True) so the exception keeps propagating: the run
         # is recorded as failed, but the caller still sees what went wrong.
-        if exc is not None:
-            if isinstance(exc, KeyboardInterrupt):
-                self.finish(RunStatus.KILLED, error="Interrupted by user.")
-            else:
-                self.fail(exc)
-            return
-        self.finish()
+        try:
+            if exc is not None:
+                if isinstance(exc, KeyboardInterrupt):
+                    self.finish(RunStatus.KILLED, error="Interrupted by user.")
+                else:
+                    self.fail(exc)
+                return
+            self.finish()
+        finally:
+            span = getattr(self, "_span", None)
+            if span is not None:
+                telemetry.annotate(getattr(self, "_span_scope", None), status=self.status)
+                span.__exit__(exc_type, exc, tb)
+                self._span = None
 
     # -- reading back --------------------------------------------------------
 

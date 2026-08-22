@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from mlango.core import telemetry
 from mlango.core.serialization import jsonable
 from mlango.metastore.models import RunStatus, Span, Trace, utcnow
 from mlango.metastore.session import session_scope
@@ -110,36 +111,44 @@ class Tracer:
         self._ordering += 1
         ordering = self._ordering
 
-        if not self.enabled or self.trace_id is None:
-            yield result
-            return
+        # Emitted whether or not the metastore trace is on: they answer to
+        # different audiences, and turning off mlango's own history is not a
+        # request to go dark in somebody's Grafana.
+        with telemetry.span(
+            f"mlango.{kind}", agent=self.agent_label, step=ordering, span_kind=kind
+        ) as external:
+            if not self.enabled or self.trace_id is None:
+                yield result
+                telemetry.annotate(external, output=_short(result.get("output")))
+                return
 
-        error = ""
-        try:
-            yield result
-        except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            raise
-        finally:
+            error = ""
             try:
-                with session_scope() as session:
-                    session.add(
-                        Span(
-                            trace_id=self.trace_id,
-                            ordering=ordering,
-                            name=name,
-                            kind=kind,
-                            input=_jsonable(payload),
-                            output=_jsonable(result.get("output")),
-                            usage=_jsonable(result.get("usage")) or {},
-                            error=error,
-                            started_at=utcnow(),
-                            ended_at=utcnow(),
-                            duration_s=time.perf_counter() - started,
+                yield result
+                telemetry.annotate(external, output=_short(result.get("output")))
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                raise
+            finally:
+                try:
+                    with session_scope() as session:
+                        session.add(
+                            Span(
+                                trace_id=self.trace_id,
+                                ordering=ordering,
+                                name=name,
+                                kind=kind,
+                                input=_jsonable(payload),
+                                output=_jsonable(result.get("output")),
+                                usage=_jsonable(result.get("usage")) or {},
+                                error=error,
+                                started_at=utcnow(),
+                                ended_at=utcnow(),
+                                duration_s=time.perf_counter() - started,
+                            )
                         )
-                    )
-            except Exception:
-                logger.exception("Could not record span %r on trace %s.", name, self.uuid)
+                except Exception:
+                    logger.exception("Could not record span %r on trace %s.", name, self.uuid)
 
     @property
     def short_id(self) -> str:
@@ -190,3 +199,11 @@ def _jsonable(payload: Any) -> Any:
 
 
 __all__ = ["Tracer", "recent_traces", "get_trace"]
+
+
+def _short(value: object, length: int = 200) -> str | None:
+    """A span attribute, not a transcript: the metastore keeps the full text."""
+    if value is None:
+        return None
+    text = str(value)
+    return text if len(text) <= length else text[: length - 1] + "…"
