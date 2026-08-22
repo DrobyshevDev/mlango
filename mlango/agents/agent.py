@@ -184,7 +184,14 @@ class Agent(Declarative):
             session_id=session_id,
             run_id=run_id,
             enabled=self.tracing_enabled(),
-            meta={"model": self.get_model(), "provider": provider.name},
+            meta={
+                "model": self.get_model(),
+                "provider": provider.name,
+                # Which declaration answered. Without it a trace from last month
+                # is read against today's prompt, which is how people conclude
+                # the model changed when the prompt did.
+                "version": _version_for(type(self)),
+            },
         ).start(message)
 
         result = AgentRun(session_id=session_id, trace_uuid=tracer.uuid, messages=messages)
@@ -245,7 +252,14 @@ class Agent(Declarative):
             session_id=session_id,
             run_id=run_id,
             enabled=self.tracing_enabled(),
-            meta={"model": self.get_model(), "provider": provider.name},
+            meta={
+                "model": self.get_model(),
+                "provider": provider.name,
+                # Which declaration answered. Without it a trace from last month
+                # is read against today's prompt, which is how people conclude
+                # the model changed when the prompt did.
+                "version": _version_for(type(self)),
+            },
         ).start(message)
 
         result = AgentRun(session_id=session_id, trace_uuid=tracer.uuid, messages=messages)
@@ -453,6 +467,120 @@ class Agent(Declarative):
 
     # -- serving -------------------------------------------------------------
 
+    # -- versions ------------------------------------------------------------
+
+    @classmethod
+    def register_version(cls, *, notes: str = "") -> Any:
+        """Record the current declaration, if it is not already the newest.
+
+        Idempotent by fingerprint: running an agent a thousand times against an
+        unchanged prompt leaves one row. A version exists exactly when the
+        declaration differs from the last one recorded, which is what makes
+        "when did this prompt change" answerable at all.
+        """
+        from sqlalchemy import func, select
+
+        from mlango.metastore.models import AgentVersion, Stage
+        from mlango.metastore.session import session_scope
+
+        opts = cls._meta
+        fingerprint = opts.fingerprint()
+
+        with session_scope() as session:
+            newest = session.execute(
+                select(AgentVersion)
+                .where(AgentVersion.label == opts.label)
+                .order_by(AgentVersion.version.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if newest is not None and newest.fingerprint == fingerprint:
+                return newest
+
+            highest = session.execute(
+                select(func.max(AgentVersion.version)).where(AgentVersion.label == opts.label)
+            ).scalar()
+            version = AgentVersion(
+                label=opts.label,
+                version=(highest or 0) + 1,
+                fingerprint=fingerprint,
+                config=opts.recordable(),
+                # Names only. The code behind a tool is not recoverable from a
+                # row, and a list of names at least makes a removed tool visible.
+                tools=sorted(_declared_tool_names(cls)),
+                stage=Stage.NONE,
+                notes=notes,
+            )
+            session.add(version)
+            session.flush()
+            logger.info("Registered %s", version.ref)
+            return version
+
+    @classmethod
+    def versions(cls) -> list[Any]:
+        """Every recorded version, newest first."""
+        from sqlalchemy import select
+
+        from mlango.metastore.models import AgentVersion
+        from mlango.metastore.session import session_scope
+
+        with session_scope() as session:
+            return list(
+                session.execute(
+                    select(AgentVersion)
+                    .where(AgentVersion.label == cls._meta.label)
+                    .order_by(AgentVersion.version.desc())
+                ).scalars()
+            )
+
+    @classmethod
+    def current_version(cls) -> Any | None:
+        """The recorded version matching the declaration as it stands now.
+
+        None when the declaration has changed since anything was recorded —
+        which is the interesting case, because it means what is deployed and
+        what is written down have parted company.
+        """
+        fingerprint = cls._meta.fingerprint()
+        return next((v for v in cls.versions() if v.fingerprint == fingerprint), None)
+
+    @classmethod
+    def promote(cls, version: int, stage: str = "production") -> Any:
+        """Move a version to a stage, demoting whatever held it."""
+        from sqlalchemy import select
+
+        from mlango.core.exceptions import ImproperlyConfigured
+        from mlango.metastore.models import AgentVersion, Stage
+        from mlango.metastore.session import session_scope
+
+        if stage not in Stage.ALL:
+            raise ImproperlyConfigured(f"{stage!r} is not a stage. One of: {', '.join(Stage.ALL)}.")
+
+        with session_scope() as session:
+            rows = list(
+                session.execute(
+                    select(AgentVersion).where(AgentVersion.label == cls._meta.label)
+                ).scalars()
+            )
+            target = next((row for row in rows if row.version == version), None)
+            if target is None:
+                raise LookupError(f"{cls._meta.label} has no version {version}.")
+
+            if stage in (Stage.PRODUCTION, Stage.STAGING):
+                # One version per stage, or "production" stops meaning anything.
+                for row in rows:
+                    if row.stage == stage and row is not target:
+                        row.stage = Stage.ARCHIVED
+            target.stage = stage
+            session.flush()
+            return target
+
+    @classmethod
+    def production(cls) -> Any | None:
+        """The version at stage ``production``, if one has been promoted."""
+        from mlango.metastore.models import Stage
+
+        return next((v for v in cls.versions() if v.stage == Stage.PRODUCTION), None)
+
     @classmethod
     def as_endpoint(cls, **agent_kwargs: Any) -> Any:
         """A chat endpoint for ``routes.py``, à la Django's ``as_view()``."""
@@ -487,6 +615,50 @@ class Agent(Declarative):
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+def _version_for(agent_class: Any) -> int | None:
+    """The recorded version of this declaration, registering it if it is new.
+
+    Cached on the class by fingerprint, so a served agent answers a thousand
+    requests with one query rather than a thousand. The cache key is the
+    fingerprint itself, so editing a prompt in a live reload is picked up.
+
+    Best effort throughout: an agent that can answer must not stop answering
+    because the metastore is unreachable.
+    """
+    try:
+        fingerprint = agent_class._meta.fingerprint()
+    except Exception:  # noqa: BLE001 - see above
+        return None
+
+    cached = getattr(agent_class, "_version_cache", None)
+    if cached and cached[0] == fingerprint:
+        return cached[1]
+
+    try:
+        version = agent_class.register_version().version
+    except Exception:  # noqa: BLE001 - see above
+        logger.debug("Could not register a version for %s", agent_class, exc_info=True)
+        return None
+
+    agent_class._version_cache = (fingerprint, version)
+    return version
+
+
+def _declared_tool_names(agent_class: Any) -> list[str]:
+    """Tool names from the declaration, without instantiating the agent.
+
+    ``get_tools`` builds a Toolbox on an instance because it caches one;
+    recording a version should not require constructing an agent, and a name
+    is all the row can honestly keep anyway.
+    """
+    names = []
+    for item in agent_class._meta.extras.get("tools") or []:
+        name = getattr(item, "name", None) or getattr(item, "__name__", None)
+        if name:
+            names.append(str(name))
+    return names
 
 
 def _as_tool(item: Any) -> Tool:

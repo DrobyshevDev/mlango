@@ -134,7 +134,7 @@ python manage.py showmigrations -v 2               # with each operation listed
 
 ## The metastore's own tables
 
-The ten metastore tables are framework-owned and never change shape at your
+The eleven metastore tables are framework-owned and never change shape at your
 request, so they are created on demand — you do not need `migrate` before your
 first `materialize()`. `migrate` creates them too, and then applies your
 declarative migrations.

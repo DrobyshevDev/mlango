@@ -13,7 +13,7 @@ graph TD
     end
 
     subgraph persistence[" "]
-        META["<b>metastore</b><br/><small>10 tables · sessions</small>"]
+        META["<b>metastore</b><br/><small>11 tables · sessions</small>"]
         MIG["<b>migrations</b><br/><small>autodetector · writer · executor</small>"]
         STORE["<b>storage</b><br/><small>artifacts</small>"]
     end
@@ -139,7 +139,7 @@ inversion: the parts that are easy to forget are the parts you do not write.
 
 ## The metastore
 
-Ten tables, SQLite by default and the same schema on Postgres.
+Eleven tables, SQLite by default and the same schema on Postgres.
 
 ```mermaid
 erDiagram

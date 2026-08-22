@@ -428,6 +428,45 @@ python manage.py agent support.Support "..." --show-steps       # print tool cal
 python manage.py agent support.Support "..." --session user-42  # with memory
 ```
 
+
+### Agent versions
+
+A model version is an artifact; an agent's behaviour *is* its declaration, so a
+version is the declaration. One is recorded the first time an agent runs, and
+again whenever the prompt, the model or any other `Meta` option changes:
+
+```bash
+python manage.py agent support.Support --versions
+python manage.py agent support.Support --promote 3
+python manage.py agent support.Support --promote 3 --stage staging
+```
+
+```
+Version  Stage       Fingerprint   Tools            Recorded          Current
+-------  ----------  ------------  ---------------  ----------------  -------
+v3       none        16c5d2295ade  search_docs      2026-08-22 11:09  ←
+v2       production  58fa45bab53f  search_docs      2026-08-19 09:22
+v1       archived    a1b2c3d4e5f6  search_docs      2026-08-14 17:40
+```
+
+The `←` marks the version matching the declaration in front of you. When nothing
+is marked, the code has been edited since anything was recorded — what is
+written down and what would run have parted company, and the command says so.
+
+Registration is idempotent by fingerprint and resolved once per process, so a
+served agent answering a thousand requests writes one row and runs one query.
+Every trace records which version answered, so a trace read next month is not
+interpreted against today's prompt.
+
+!!! warning "A version pins configuration, not code"
+    Tools are callables and live in your source. A recorded version keeps their
+    *names*, so a removed tool is visible, but it cannot restore an
+    implementation. A registry that claimed otherwise would be lying.
+
+Reverting a prompt records a new version with the earlier fingerprint rather
+than reusing the old row: the history is a log of what the declaration was and
+when, and "it changed back on Tuesday" is part of that.
+
 ### Inspecting what happened
 
 ```bash

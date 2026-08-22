@@ -17,6 +17,17 @@ All notable changes to this project are documented here. The format follows
   gates a prompt change the way it already gates a promotion. Cases present in
   only one run are named rather than folded into the totals, because a suite
   that grew is a different suite.
+- **Agents have versions.** Models had a registry, stages and `promote()`; an
+  agent had none of it, though its behaviour is entirely its declaration. One is
+  recorded the first time an agent runs and again whenever the prompt, model or
+  any other `Meta` option changes — idempotent by fingerprint, resolved once per
+  process, so a served agent writes one row rather than one per request. Every
+  trace records which version answered. `manage.py agent LABEL --versions` lists
+  them and marks the one matching the code; `--promote N [--stage S]` moves it.
+  A version pins configuration and never code: tools are callables, so their
+  names are recorded and their implementations cannot be.
+- `mlango_agent_versions` is the tenth metastore table, added on connect to an
+  existing database like any other additive column.
 - Every evaluation run now records what it evaluated *was configured like* — an
   agent's prompt, model and step limit; a model's registered version and
   hyperparameters — so `diff --eval` puts a cause beside the effect instead of

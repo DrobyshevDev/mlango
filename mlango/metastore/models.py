@@ -169,6 +169,48 @@ class ModelVersion(Base):
         return f"<ModelVersion {self.ref} stage={self.stage}>"
 
 
+class AgentVersion(Base):
+    """A recorded state of an agent's declaration, promotable like a model.
+
+    The difference from :class:`ModelVersion` is that there is no artifact. An
+    agent's behaviour is its declaration — the prompt, the model, the step
+    limit — so the row *is* the version, and there is nothing to save or load
+    from storage.
+
+    That also bounds what a version can restore: tools are callables and live
+    in code, so a recorded version pins the configuration and never the
+    implementation. Saying so is better than a registry that pretends to
+    reproduce something it cannot.
+    """
+
+    __tablename__ = "mlango_agent_versions"
+    __table_args__ = (
+        UniqueConstraint("label", "version", name="uq_agent_label_version"),
+        Index("ix_agent_stage", "label", "stage"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    label: Mapped[str] = mapped_column(String(255), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    #: Hash of the declaration. A new version exists exactly when this changes.
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    #: The Meta options that survive being written down.
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    #: Tool names at the time, recorded so a missing tool is visible later even
+    #: though the code behind it is not.
+    tools: Mapped[list[str]] = mapped_column(JSON, default=list)
+    stage: Mapped[str] = mapped_column(String(32), default=Stage.NONE)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+    @property
+    def ref(self) -> str:
+        return f"{self.label}@v{self.version}"
+
+    def __repr__(self) -> str:
+        return f"<AgentVersion {self.ref} stage={self.stage}>"
+
+
 # --------------------------------------------------------------------------- #
 # Runs
 # --------------------------------------------------------------------------- #
@@ -442,6 +484,7 @@ ALL_TABLES = (
     MigrationRecord,
     DatasetVersion,
     ModelVersion,
+    AgentVersion,
     Run,
     Metric,
     Artifact,
@@ -461,6 +504,7 @@ __all__ = [
     "MigrationRecord",
     "DatasetVersion",
     "ModelVersion",
+    "AgentVersion",
     "Run",
     "Metric",
     "Artifact",

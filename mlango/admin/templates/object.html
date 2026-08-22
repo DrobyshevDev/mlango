@@ -308,6 +308,33 @@
 {% endif %}
 
 {% if opts.kind == 'agent' %}
+{% if agent_versions %}
+<div class="card">
+  <h2>Recorded versions</h2>
+  <p class="subtitle">An agent's behaviour is its declaration, so a version is the declaration rather than a file. Tools are recorded by name: the code behind them comes from whatever is imported when the agent runs.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Version</th><th>Stage</th><th>Fingerprint</th><th>Tools</th><th>Recorded</th><th></th></tr></thead>
+    <tbody>
+      {% for v in agent_versions.rows %}
+      <tr>
+        <td class="num">v{{ v.version }}</td>
+        <td><span class="tag {{ v.stage }}">{{ v.stage }}</span></td>
+        <td class="mono">{{ v.fingerprint[:12] }}</td>
+        <td class="mono">{{ (v.tools or []) | join(', ') or '—' }}</td>
+        <td>{{ v.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>{% if agent_versions.current == v.version %}<span class="tag ok">current</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if agent_versions.current is none %}
+  <p class="subtitle">The declaration has changed since the last recorded version — what is written down and what would run have parted company.</p>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="card">
   <h2>Recent traces</h2>
   {% if traces %}

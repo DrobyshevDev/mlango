@@ -351,6 +351,9 @@ def _target_state(target: Any) -> dict[str, Any]:
         state: dict[str, Any] = {"_target_fingerprint": opts.fingerprint()}
         if opts.kind == "agent":
             state["_target_config"] = opts.recordable()
+            current = target.current_version()
+            if current is not None:
+                state["_target_version"] = current.version
             return state
 
         if opts.kind == "model":

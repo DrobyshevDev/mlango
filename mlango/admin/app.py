@@ -170,6 +170,7 @@ def build_admin_app(site: AdminSite | None = None) -> FastAPI:
             from mlango.agents.tracing import recent_traces
 
             context["traces"] = recent_traces(limit=25, agent=label)
+            context["agent_versions"] = _agent_versions(entry.target)
         elif entry.kind == "eval":
             context["runs"] = _runs_for(label)
             context["eval_diff"] = _eval_diff(label)
@@ -485,6 +486,30 @@ def _drift_summary(model_class: Any, versions: list[Any]) -> dict[str, Any] | No
         "days": DRIFT_WINDOW_DAYS,
         "worst": ranked[0][1]["verdict"],
         "columns": [{"name": name, **entry} for name, entry in ranked],
+    }
+
+
+def _agent_versions(agent_class: Any) -> dict[str, Any] | None:
+    """Recorded declarations, and whether the code still matches one.
+
+    Reading only: a page load must not write a version row, because opening
+    the admin is not a deployment.
+    """
+    try:
+        versions = agent_class.versions()
+    except Exception:  # noqa: BLE001 - an incomplete declaration still renders
+        return None
+    if not versions:
+        return None
+
+    try:
+        fingerprint = agent_class._meta.fingerprint()
+    except Exception:  # noqa: BLE001 - as above
+        fingerprint = ""
+
+    return {
+        "rows": versions,
+        "current": next((v.version for v in versions if v.fingerprint == fingerprint), None),
     }
 
 

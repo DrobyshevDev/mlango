@@ -8,6 +8,7 @@ different kinds of object.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from mlango.core.exceptions import FieldError, ImproperlyConfigured
@@ -188,8 +189,14 @@ class Options:
         between two runs can say *what changed* and not only that something
         did. Callables and live objects are excluded for the same reason
         migrations exclude them: they do not survive being written down.
+
+        The test is an actual serialisation rather than a type check, because
+        ``tools = [some_tool]`` is a list of live objects and a list is not
+        made of strings by being a list. ``fingerprint`` keeps the shallower
+        rule on purpose: tightening it would change every digest already
+        written into a migration or a dataset version.
         """
-        return {k: v for k, v in sorted(self.extras.items()) if _simple(v)}
+        return {k: v for k, v in sorted(self.extras.items()) if _jsonable(v)}
 
     def fingerprint(self) -> str:
         """Stable hash of the declaration — the identity of a schema version."""
@@ -203,6 +210,17 @@ class Options:
 
     def __repr__(self) -> str:
         return f"<Options for {self.label}>"
+
+
+def _jsonable(value: Any) -> bool:
+    """Whether ``value`` really survives being written to a JSON column."""
+    if not _simple(value):
+        return False
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _simple(value: Any) -> bool:

@@ -1,6 +1,7 @@
 """Metastore: the database of record for runs, versions, metrics and traces."""
 
 from mlango.metastore.models import (
+    AgentVersion,
     Artifact,
     Base,
     DatasetVersion,
@@ -33,6 +34,7 @@ from mlango.metastore.session import (
 
 __all__ = [
     "Base",
+    "AgentVersion",
     "Artifact",
     "DatasetVersion",
     "EvalResult",
