@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+## 0.3.0 — 2026-08-22
+
+0.2.0 answered questions about a single version: why did it say that, has the
+world moved. This release is about the moment you replace one thing with
+another. What did the new version break, was the difference real or a coin, what
+did I change to cause it, and what would the candidate have told the people who
+actually wrote in — asked of models, of agents, and of artefacts mlango never
+trained.
+
 ### Added
 
 - `manage.py diff --eval LABEL` compares two runs of an evaluation suite, case by
@@ -47,7 +56,7 @@ All notable changes to this project are documented here. The format follows
   them and marks the one matching the code; `--promote N [--stage S]` moves it.
   A version pins configuration and never code: tools are callables, so their
   names are recorded and their implementations cannot be.
-- `mlango_agent_versions` is the tenth metastore table, added on connect to an
+- `mlango_agent_versions` is the eleventh metastore table, added on connect to an
   existing database like any other additive column.
 - Every evaluation run now records what it evaluated *was configured like* — an
   agent's prompt, model and step limit; a model's registered version and

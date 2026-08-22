@@ -108,6 +108,12 @@ jobs:
           /tmp/fresh/bin/python manage.py drift demo.Sentiment --against demo.Reviews
           /tmp/fresh/bin/python manage.py train demo.Sentiment -p max_features=1 -v 0
           /tmp/fresh/bin/python manage.py diff demo.Sentiment 1 2 -n 100
+          # 0.3.0's own commands. The suite covers them against the source tree;
+          # only this job proves they survive being packaged.
+          /tmp/fresh/bin/python manage.py evaluate demo.SentimentAccuracy -v 0
+          /tmp/fresh/bin/python manage.py diff --eval demo.SentimentAccuracy
+          /tmp/fresh/bin/python manage.py agent demo.Helper --versions
+          /tmp/fresh/bin/python manage.py agent demo.Helper --promote 1 --stage staging
           cd /tmp
           /tmp/fresh/bin/mlango startplugin mlango-smoke --kind trainer
           test -f mlango-smoke/pyproject.toml

@@ -114,7 +114,7 @@ curl http://127.0.0.1:8000/api/health
 ```json
 {
   "status": "ok",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "metastore": true,
   "apps": ["reviews", "support"],
   "counts": {"dataset": 2, "model": 1, "agent": 1, "eval": 1}

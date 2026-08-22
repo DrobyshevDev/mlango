@@ -102,7 +102,7 @@ Written plainly, because a framework that claims to fit everything fits nothing:
 - **Your problem is a large data-engineering DAG.** That is Dagster or Airflow
   territory. mlango's queryset is for data a model reads, not for a warehouse
   pipeline.
-- **You need a mature plugin ecosystem today.** mlango is 0.2.0. MLflow has a
+- **You need a mature plugin ecosystem today.** mlango is 0.3.0. MLflow has a
   decade and hundreds of integrations. That gap is real and will take time.
 - **You only need a hosted dashboard for a small team.** W&B will make you
   happier faster.
