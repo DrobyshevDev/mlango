@@ -242,6 +242,11 @@ class Eval(Declarative):
                 "_dataset": self.get_dataset()._meta.label,
                 "_scorers": sorted(self.get_scorers()),
                 "_threshold": self.get_threshold(),
+                # What the target was configured like when this ran. Without
+                # it a comparison between two runs can say the answers moved
+                # and not why, which leaves the user to remember what they
+                # changed — exactly the thing a framework should not ask.
+                **_target_state(target),
             },
             tags=tags,
             notes=notes,
@@ -328,6 +333,40 @@ class Eval(Declarative):
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+def _target_state(target: Any) -> dict[str, Any]:
+    """The evaluated thing's identity and configuration, as far as it has one.
+
+    An agent's is its declaration: the prompt, the model, the step limit. A
+    model's is the registered version it will load, because its behaviour is
+    the artifact rather than the class. Anything else contributes nothing and
+    says so by omission rather than by a null.
+    """
+    try:
+        opts = getattr(target, "_meta", None)
+        if opts is None:
+            return {}
+
+        state: dict[str, Any] = {"_target_fingerprint": opts.fingerprint()}
+        if opts.kind == "agent":
+            state["_target_config"] = opts.recordable()
+            return state
+
+        if opts.kind == "model":
+            versions = target.versions()
+            if versions:
+                newest = versions[0]
+                state["_target_version"] = newest.version
+                state["_target_config"] = dict(newest.params or {})
+        return state
+    except Exception:  # noqa: BLE001 - the whole body, deliberately
+        # Every line here describes the run rather than performing it, so any
+        # failure costs a note in the report and must never cost the run.
+        # getattr with a default does not help: a property that raises anything
+        # other than AttributeError propagates straight through it.
+        logger.debug("Could not record the target's state", exc_info=True)
+        return {}
 
 
 def _resolve_target(target: Any) -> Any:

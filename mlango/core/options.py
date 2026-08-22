@@ -181,13 +181,23 @@ class Options:
             "options": {k: v for k, v in sorted(self.extras.items()) if _simple(v)},
         }
 
+    def recordable(self) -> dict[str, Any]:
+        """The ``Meta`` options that survive a round trip through JSON.
+
+        What a run can store about the thing it exercised, so a comparison
+        between two runs can say *what changed* and not only that something
+        did. Callables and live objects are excluded for the same reason
+        migrations exclude them: they do not survive being written down.
+        """
+        return {k: v for k, v in sorted(self.extras.items()) if _simple(v)}
+
     def fingerprint(self) -> str:
         """Stable hash of the declaration — the identity of a schema version."""
         return fingerprint(
             {
                 "label": self.label,
                 "fields": [f.describe() for f in self.fields],
-                "options": {k: v for k, v in sorted(self.extras.items()) if _simple(v)},
+                "options": self.recordable(),
             }
         )
 

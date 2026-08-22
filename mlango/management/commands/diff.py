@@ -371,6 +371,8 @@ class Command(BaseCommand):
                 )
             )
 
+        self._config_lines(report)
+
         for side, cases in (("older", report["only_left"]), ("newer", report["only_right"])):
             if cases:
                 # Never folded into the totals: a suite that grew is a different
@@ -385,6 +387,38 @@ class Command(BaseCommand):
             self.table(
                 columns, [[_short(row.get(c)) for c in columns] for row in report["changes"]]
             )
+
+    def _config_lines(self, report: dict[str, Any]) -> None:
+        """What was different about the thing being evaluated.
+
+        Printed before the verdict, because "the prompt changed" is the
+        context in which "seven fixed, two broken" means anything at all.
+        """
+        config = report.get("config") or {}
+        changed = config.get("changed") or {}
+        version = config.get("version")
+
+        if not changed and not version:
+            if config.get("identical"):
+                self.write(
+                    self.style.dim(
+                        "  config         unchanged — the difference is the target's own"
+                    )
+                )
+            return
+
+        self.write("")
+        self.write(self.style.bold("What changed about it"))
+        if version:
+            self.write(f"  version        {version['was']} → {version['now']}")
+        for key, entry in changed.items():
+            if entry["long"]:
+                # A system prompt is a page; naming it is the useful part.
+                self.write(
+                    f"  {key:<14} changed ({_length(entry['was'])} → {_length(entry['now'])})"
+                )
+            else:
+                self.write(f"  {key:<14} {entry['was']!r} → {entry['now']!r}")
 
     def _truth_block(self, report: dict[str, Any]) -> None:
         metrics = report["metrics"]
@@ -468,6 +502,12 @@ class Command(BaseCommand):
         self.ok(
             f"No regression: {_side(report['right'])} keeps everything {_side(report['left'])} got right."
         )
+
+
+def _length(value: Any) -> str:
+    if value is None:
+        return "unset"
+    return f"{len(str(value))} chars"
 
 
 def _default_alpha() -> float:

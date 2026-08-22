@@ -93,6 +93,10 @@ def compare_runs(
         "changed": len(changed),
         "agreement": (total - len(fixed) - len(broke)) / total,
         "significance": significance(len(fixed), len(broke), alpha=alpha),
+        # What was different about the thing being evaluated. Results without
+        # this say the answers moved; nobody can act on that without also
+        # remembering what they changed three days ago.
+        "config": config_delta(left.params or {}, right.params or {}),
     }
 
     if max_changes:
@@ -113,6 +117,43 @@ def compare_runs(
         ]
 
     return report
+
+
+def config_delta(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    """What changed about the evaluated target between two runs.
+
+    Both sides record the target's configuration, so this is a plain diff of
+    two dicts. A prompt is reported as changed rather than printed: a system
+    prompt is usually a page long, and a diff view for it belongs in the
+    terminal only when asked for.
+    """
+    before = dict(left.get("_target_config") or {})
+    after = dict(right.get("_target_config") or {})
+
+    delta: dict[str, Any] = {}
+    for key in sorted(set(before) | set(after)):
+        was, now = before.get(key), after.get(key)
+        if was == now:
+            continue
+        delta[key] = {"was": was, "now": now, "long": _is_long(was) or _is_long(now)}
+
+    out: dict[str, Any] = {"changed": delta}
+    if left.get("_target_version") != right.get("_target_version"):
+        out["version"] = {"was": left.get("_target_version"), "now": right.get("_target_version")}
+
+    identical = left.get("_target_fingerprint") == right.get("_target_fingerprint")
+    # A fingerprint covers the declaration; a model version covers the
+    # artifact. Both have to match before saying nothing changed, or a
+    # retrained model looks like an untouched one.
+    out["identical"] = bool(
+        identical and left.get("_target_fingerprint") and not out.get("version")
+    )
+    return out
+
+
+def _is_long(value: Any) -> bool:
+    """Too long to print inline — a system prompt, usually."""
+    return isinstance(value, str) and len(value) > 60
 
 
 def recent_runs(label: str, limit: int = 2) -> list[Any]:
@@ -150,4 +191,4 @@ def _output_of(row: Any) -> Any:
     return output
 
 
-__all__ = ["compare_runs", "recent_runs"]
+__all__ = ["compare_runs", "recent_runs", "config_delta"]

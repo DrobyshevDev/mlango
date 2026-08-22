@@ -239,6 +239,22 @@
     {% endif %}
   </dl>
 
+  {% if eval_diff.config.changed or eval_diff.config.version %}
+  <h3 class="config-delta">What changed about it</h3>
+  <dl class="kv">
+    {% if eval_diff.config.version %}
+    <dt>version</dt>
+    <dd class="mono">{{ eval_diff.config.version.was }} → {{ eval_diff.config.version.now }}</dd>
+    {% endif %}
+    {% for key, entry in eval_diff.config.changed.items() %}
+    <dt>{{ key }}</dt>
+    <dd class="mono">{% if entry.long %}changed ({{ (entry.was or '') | length }} → {{ (entry.now or '') | length }} chars){% else %}{{ entry.was }} → {{ entry.now }}{% endif %}</dd>
+    {% endfor %}
+  </dl>
+  {% elif eval_diff.config.identical %}
+  <p class="subtitle">Nothing about the target changed — the difference is its own.</p>
+  {% endif %}
+
   {% for side, cases in (('older', eval_diff.only_left), ('newer', eval_diff.only_right)) %}
     {% if cases %}
     <p class="subtitle">{{ cases | length }} case{{ '' if cases | length == 1 else 's' }} only in the {{ side }} run — a suite that changed is not the same suite: <span class="mono">{{ cases[:5] | join(', ') }}{% if cases | length > 5 %}…{% endif %}</span></p>

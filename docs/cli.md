@@ -343,6 +343,30 @@ With no `--runs`, the two most recent finished runs of that suite are compared.
 
 The eval page in the admin shows the same comparison for the last two runs. Unlike the model diff it costs nothing to render — nothing is loaded and nothing is scored, because `evaluate` already wrote a verdict per case.
 
+The report also says **what changed about the thing being evaluated**. Each run
+records the target's configuration — an agent's prompt, model and step limit;
+a model's registered version and hyperparameters — so the diff can put a cause
+beside the effect:
+
+```
+  verdict        a real regression: 50 broken against 0 fixed (p=0.000)
+
+What changed about it
+  version        21 → 22
+  C              8.0 → 0.01
+  max_features   5000 → 1
+```
+
+A long value such as a system prompt is reported as changed with both lengths
+rather than printed; a page of text in a terminal report helps nobody. When
+nothing about the target moved, the report says so — and that is informative in
+its own right, because the difference is then the target's own: sampling, a
+temperature, a tool that answered differently.
+
+Runs recorded before this existed carry no configuration, and are reported as
+unknown rather than as unchanged.
+
+
 **`reworded`** is the line that only matters for an agent: cases that still pass
 but answer differently. For a classifier that is nothing; for something whose
 output a person reads, half the product just changed without failing a test.

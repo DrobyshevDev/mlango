@@ -17,6 +17,16 @@ All notable changes to this project are documented here. The format follows
   gates a prompt change the way it already gates a promotion. Cases present in
   only one run are named rather than folded into the totals, because a suite
   that grew is a different suite.
+- Every evaluation run now records what it evaluated *was configured like* — an
+  agent's prompt, model and step limit; a model's registered version and
+  hyperparameters — so `diff --eval` puts a cause beside the effect instead of
+  leaving the user to remember what they changed. A long value such as a system
+  prompt is reported as changed rather than printed. When nothing about the
+  target moved the report says so, which is informative in itself: the
+  difference is then the target's own. Runs from before this existed are
+  reported as unknown rather than as unchanged.
+- `Options.recordable()` is the public name for the `Meta` options that survive
+  a round trip through JSON — the same filter the fingerprint already used.
 - The eval page in the admin shows the same comparison for the last two runs, so
   a broken case is visible without running a command. It renders for free where
   the model diff would not: nothing is loaded and nothing is scored, because

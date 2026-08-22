@@ -194,3 +194,199 @@ class TestFindingTheRuns:
             session.add(Run(kind=RunKind.TRAIN, target="app.Suite", status=RunStatus.FINISHED))
 
         assert len(recent_runs("app.Suite", limit=10)) == 1
+
+
+class TestWhatChangedAboutTheTarget:
+    """Results without a cause leave the user to remember what they changed."""
+
+    def _run(self, label, cases, *, config=None, version=None, fingerprint="fp"):
+        from mlango.metastore.models import EvalResult, Run, RunKind, RunStatus
+        from mlango.metastore.session import session_scope
+
+        params = {"_eval": label, "_target_fingerprint": fingerprint}
+        if config is not None:
+            params["_target_config"] = config
+        if version is not None:
+            params["_target_version"] = version
+
+        with session_scope() as session:
+            run = Run(kind=RunKind.EVAL, target=label, status=RunStatus.FINISHED, params=params)
+            session.add(run)
+            session.flush()
+            for case_id, passed in cases.items():
+                session.add(
+                    EvalResult(
+                        run_id=run.id,
+                        eval_label=label,
+                        case_id=case_id,
+                        passed=passed,
+                        output="pass" if passed else "fail",
+                        expected="pass",
+                    )
+                )
+            return run
+
+    def test_a_changed_option_is_named_with_both_values(self, project):
+        older = self._run("app.Suite", {"a": True}, config={"model": "sonnet", "max_steps": 8})
+        newer = self._run("app.Suite", {"a": False}, config={"model": "opus", "max_steps": 8})
+
+        delta = compare_runs(older, newer)["config"]["changed"]
+
+        assert set(delta) == {"model"}, "an option that held is not a change"
+        assert delta["model"]["was"] == "sonnet"
+        assert delta["model"]["now"] == "opus"
+        assert delta["model"]["long"] is False
+
+    def test_a_long_prompt_is_flagged_rather_than_inlined(self, project):
+        """A system prompt is a page; printing it in a report helps nobody."""
+        older = self._run("app.Suite", {"a": True}, config={"system": "be helpful " * 20})
+        newer = self._run("app.Suite", {"a": True}, config={"system": "be terse " * 20})
+
+        entry = compare_runs(older, newer)["config"]["changed"]["system"]
+        assert entry["long"] is True
+
+    def test_an_added_option_shows_what_it_was_not(self, project):
+        older = self._run("app.Suite", {"a": True}, config={})
+        newer = self._run("app.Suite", {"a": True}, config={"thinking": "adaptive"})
+
+        entry = compare_runs(older, newer)["config"]["changed"]["thinking"]
+        assert entry["was"] is None
+        assert entry["now"] == "adaptive"
+
+    def test_a_retrained_model_is_a_change_even_with_the_same_declaration(self, project):
+        """The class did not move; the artifact did, and that is what ran."""
+        older = self._run("app.Suite", {"a": True}, config={"C": 1.0}, version=3)
+        newer = self._run("app.Suite", {"a": False}, config={"C": 1.0}, version=4)
+
+        config = compare_runs(older, newer)["config"]
+        assert config["version"] == {"was": 3, "now": 4}
+        assert config["identical"] is False, "a new version is not an unchanged target"
+
+    def test_an_untouched_target_says_so(self, project):
+        """Then the movement is the target's own — sampling, temperature, a tool."""
+        config = {"model": "opus", "system": "same"}
+        older = self._run("app.Suite", {"a": True}, config=config, version=2)
+        newer = self._run("app.Suite", {"a": False}, config=config, version=2)
+
+        delta = compare_runs(older, newer)["config"]
+        assert delta["changed"] == {}
+        assert delta["identical"] is True
+
+    def test_runs_from_before_this_existed_claim_nothing(self, project):
+        """An old run has no recorded config, and absence is not sameness."""
+        from mlango.metastore.models import Run, RunKind, RunStatus
+        from mlango.metastore.session import session_scope
+
+        older = self._run("app.Suite", {"a": True})
+        with session_scope() as session:
+            run = Run(kind=RunKind.EVAL, target="app.Suite", status=RunStatus.FINISHED, params={})
+            session.add(run)
+            session.flush()
+            from mlango.metastore.models import EvalResult
+
+            session.add(
+                EvalResult(
+                    run_id=run.id, eval_label="app.Suite", case_id="a", passed=True, expected="pass"
+                )
+            )
+            newer = run
+
+        config = compare_runs(older, newer)["config"]
+        assert config["changed"] == {}
+        assert config["identical"] is False, "no fingerprint on one side proves nothing"
+
+
+class TestWhatEvaluateRecords:
+    def test_an_agents_declaration_is_recorded(self, project, isolated_registry):
+        """The prompt and the model are what a prompt change changes."""
+        from mlango.agents import Agent
+        from mlango.core import fields
+        from mlango.data import Dataset, InMemorySource
+        from mlango.evals import Eval, exact_match
+
+        class Cases(Dataset):
+            id = fields.IntegerField()
+            question = fields.TextField()
+            answer = fields.TextField()
+
+            class Meta:
+                source = InMemorySource([{"id": 1, "question": "hi", "answer": "hi"}])
+                primary_key = "id"
+
+        class Bot(Agent):
+            class Meta:
+                system = "Be brief."
+                max_steps = 3
+
+        class Quality(Eval):
+            class Meta:
+                dataset = Cases
+                target = Bot
+                input_field = "question"
+                expected_field = "answer"
+                case_id_field = "id"
+                scorers = {"correct": exact_match}
+
+        from mlango.training.run import get_run
+
+        report = Quality.evaluate()
+        params = get_run(report.run.uuid).params
+
+        assert params["_target_fingerprint"]
+        assert params["_target_config"]["system"] == "Be brief."
+        assert params["_target_config"]["max_steps"] == 3
+
+    def test_a_models_version_is_recorded_because_the_artifact_is_the_behaviour(
+        self, project, reviews, isolated_registry
+    ):
+        pytest.importorskip("sklearn")
+
+        from mlango.core import fields
+        from mlango.evals import Eval, exact_match
+        from mlango.training import Model
+
+        class Guess(Model):
+            C = fields.FloatField(default=1.0)
+
+            class Meta:
+                dataset = reviews
+                trainer = "sklearn"
+                task = "classification"
+                features = ["text"]
+
+            def build(self):
+                from sklearn.feature_extraction.text import TfidfVectorizer
+                from sklearn.linear_model import LogisticRegression
+                from sklearn.pipeline import make_pipeline
+
+                return make_pipeline(TfidfVectorizer(), LogisticRegression(max_iter=200))
+
+        class Checked(Eval):
+            class Meta:
+                dataset = reviews
+                target = Guess
+                input_field = "text"
+                expected_field = "label"
+                case_id_field = "id"
+                scorers = {"correct": exact_match}
+                max_cases = 5
+
+        from mlango.training.run import get_run
+
+        Guess.fit(C=2.0)
+        params = get_run(Checked.evaluate().run.uuid).params
+
+        assert params["_target_version"] == 1
+        assert params["_target_config"]["C"] == 2.0
+
+    def test_recording_it_never_breaks_the_evaluation(self, project):
+        """Bookkeeping about a run must not be able to fail the run."""
+        from mlango.evals.base import _target_state
+
+        class Broken:
+            @property
+            def _meta(self):
+                raise RuntimeError("not a declarative at all")
+
+        assert _target_state(object()) == {}
+        assert isinstance(_target_state(Broken()), dict)
