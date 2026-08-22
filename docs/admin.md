@@ -168,7 +168,7 @@ family:
 | Dataset | A data preview with filters, search and pagination, plus materialised versions |
 | Model | Registered versions with metrics and one-click promotion, its runs, and a feature-importance chart |
 | Agent | Recent traces with steps, tokens and status |
-| Eval | Recent runs with pass rates |
+| Eval | Recent runs with pass rates, and what the last run fixed or broke against the one before it |
 
 **Runs** — filterable by kind, status and target. A run page shows the full
 reproducibility record (seed, device, host, Python version, git commit and

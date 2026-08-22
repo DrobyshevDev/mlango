@@ -17,6 +17,11 @@ All notable changes to this project are documented here. The format follows
   gates a prompt change the way it already gates a promotion. Cases present in
   only one run are named rather than folded into the totals, because a suite
   that grew is a different suite.
+- The eval page in the admin shows the same comparison for the last two runs, so
+  a broken case is visible without running a command. It renders for free where
+  the model diff would not: nothing is loaded and nothing is scored, because
+  `evaluate` already wrote a verdict per case. Two runs sharing no case id show
+  nothing rather than a table comparing things that are not comparable.
 - `reworded` counts cases that still pass and answer differently — nothing for a
   classifier, half the product for something whose output a person reads.
 - `mlango.core.stats.significance` is where McNemar's test now lives, because

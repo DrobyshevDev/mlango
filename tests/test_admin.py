@@ -390,6 +390,101 @@ class TestPages:
         assert response.status_code == 200
         assert "Runs" in response.text
 
+
+class TestEvalDiffCard:
+    """The eval page shows what the last run changed — no command needed.
+
+    Cheap enough for a page load because nothing is loaded and nothing scored:
+    ``evaluate`` already wrote a verdict per case.
+    """
+
+    def _run(self, label, cases, outputs=None):
+        from mlango.metastore.models import EvalResult, Run, RunKind, RunStatus
+        from mlango.metastore.session import session_scope
+
+        outputs = outputs or {}
+        with session_scope() as session:
+            run = Run(kind=RunKind.EVAL, target=label, status=RunStatus.FINISHED)
+            session.add(run)
+            session.flush()
+            for case_id, passed in cases.items():
+                session.add(
+                    EvalResult(
+                        run_id=run.id,
+                        eval_label=label,
+                        case_id=case_id,
+                        passed=passed,
+                        output=outputs.get(case_id, "pass" if passed else "fail"),
+                        expected="pass",
+                    )
+                )
+            return run
+
+    def test_one_run_shows_no_card(self, client, site_with_data):
+        """With nothing to compare against, an empty card would be noise."""
+        *_, accuracy = site_with_data
+        self._run(accuracy._meta.label, {"a": True})
+
+        assert "Since the previous run" not in client.get(f"/o/{accuracy._meta.label}").text
+
+    def test_a_regression_is_visible_without_running_a_command(self, client, site_with_data):
+        *_, accuracy = site_with_data
+        label = accuracy._meta.label
+        self._run(label, {"a": True, "b": True, "c": False})
+        self._run(label, {"a": True, "b": False, "c": True})
+
+        text = client.get(f"/o/{label}").text
+
+        assert "Since the previous run" in text
+        assert "3 shared cases" in text
+        assert "case that had been passing" in text, "the broken one is spelled out"
+        assert 'class="tag bad">1<' in text, "and marked, because it is the number that matters"
+
+    def test_the_verdict_says_whether_it_is_a_coin(self, client, site_with_data):
+        """Twenty-five rescued against twenty-five lost is a coin, and must read as one."""
+        *_, accuracy = site_with_data
+        label = accuracy._meta.label
+        self._run(label, {f"c{i}": i >= 25 for i in range(50)})
+        self._run(label, {f"c{i}": i < 25 for i in range(50)})
+
+        text = client.get(f"/o/{label}").text
+        assert "is a coin, not a change" in text
+
+    def test_a_landslide_of_fixes_reads_as_a_real_improvement(self, client, site_with_data):
+        *_, accuracy = site_with_data
+        label = accuracy._meta.label
+        self._run(label, {f"c{i}": False for i in range(30)})
+        self._run(label, {f"c{i}": i > 0 for i in range(30)})
+
+        assert "a real improvement" in client.get(f"/o/{label}").text
+
+    def test_cases_only_in_one_run_are_named_on_the_page(self, client, site_with_data):
+        """A suite that grew is a different suite, and the page has to say so."""
+        *_, accuracy = site_with_data
+        label = accuracy._meta.label
+        self._run(label, {"shared": True})
+        self._run(label, {"shared": True, "brand_new": True})
+
+        text = client.get(f"/o/{label}").text
+        assert "only in the newer run" in text
+        assert "brand_new" in text
+
+    def test_two_runs_sharing_no_case_render_nothing_rather_than_a_lie(
+        self, client, site_with_data
+    ):
+        *_, accuracy = site_with_data
+        label = accuracy._meta.label
+        self._run(label, {"old_numbering": True})
+        self._run(label, {"new_numbering": True})
+
+        response = client.get(f"/o/{label}")
+        assert response.status_code == 200
+        assert "Since the previous run" not in response.text
+
+    def test_a_model_page_does_not_grow_an_eval_card(self, client, site_with_data):
+        _site, _reviews, sentiment, *_ = site_with_data
+        assert "Since the previous run" not in client.get(f"/o/{sentiment._meta.label}").text
+
     def test_the_runs_list_renders_when_empty(self, client):
         response = client.get("/runs")
         assert response.status_code == 200

@@ -341,6 +341,8 @@ support.AnswerQuality 7c8f1020 → c089b7e6 on 120 shared case(s)
 
 With no `--runs`, the two most recent finished runs of that suite are compared.
 
+The eval page in the admin shows the same comparison for the last two runs. Unlike the model diff it costs nothing to render — nothing is loaded and nothing is scored, because `evaluate` already wrote a verdict per case.
+
 **`reworded`** is the line that only matters for an agent: cases that still pass
 but answer differently. For a classifier that is nothing; for something whose
 output a person reads, half the product just changed without failing a test.

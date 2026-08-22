@@ -172,6 +172,7 @@ def build_admin_app(site: AdminSite | None = None) -> FastAPI:
             context["traces"] = recent_traces(limit=25, agent=label)
         elif entry.kind == "eval":
             context["runs"] = _runs_for(label)
+            context["eval_diff"] = _eval_diff(label)
 
         return page(request, "object.html", **context)
 
@@ -485,6 +486,29 @@ def _drift_summary(model_class: Any, versions: list[Any]) -> dict[str, Any] | No
         "worst": ranked[0][1]["verdict"],
         "columns": [{"name": name, **entry} for name, entry in ranked],
     }
+
+
+def _eval_diff(label: str) -> dict[str, Any] | None:
+    """The last run against the one before it.
+
+    Cheap enough for a page load, unlike the model diff: nothing is loaded and
+    nothing is scored, because ``evaluate`` already wrote a verdict per case.
+    That is the whole difference, and it is why this one is here and that one
+    is a command you choose to run.
+    """
+    from mlango.evals.comparison import compare_runs, recent_runs
+
+    found = recent_runs(label, limit=2)
+    if len(found) < 2:
+        return None
+
+    newer, older = found
+    try:
+        return compare_runs(older, newer, max_changes=10)
+    except LookupError:
+        # No case in common — a renumbered suite, usually. Saying nothing is
+        # better than a table comparing two things that are not comparable.
+        return None
 
 
 def _dataset_versions(*, label: str | None = None, limit: int = 50) -> list[Any]:
