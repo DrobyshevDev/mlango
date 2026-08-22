@@ -19,6 +19,7 @@ sweepable and recorded on every run without the user writing any of that.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import random
 import time
@@ -35,6 +36,15 @@ from mlango.training.run import RunContext, set_global_seed
 from mlango.training.trainer import Trainer, get_trainer
 
 logger = logging.getLogger("mlango.model")
+
+#: The request a prediction belongs to, set by the serving layer so a shadow
+#: row and the row it shadowed can be paired later. A ContextVar rather than an
+#: argument because predict() is called by user code that has no idea a shadow
+#: exists, and rather than a global because one worker serves many requests at
+#: once.
+current_request: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mlango_request_id", default=None
+)
 
 
 class Model(Declarative):
@@ -582,6 +592,7 @@ def log_predictions(
 
         version = getattr(model, "_version", None)
         label = type(model)._meta.label
+        request_id = current_request.get()
         # Divided out so a batch of 500 does not report each row as taking as
         # long as the whole call.
         per_row = elapsed_ms / len(inputs) if elapsed_ms is not None and inputs else None
@@ -595,6 +606,7 @@ def log_predictions(
                         inputs=jsonable(inputs[index]),
                         output=jsonable(outputs[index]) if index < len(outputs) else None,
                         latency_ms=per_row,
+                        request_id=request_id,
                     )
                 )
         _trim_predictions(label, int(config.get("MAX_ROWS", 0) or 0))
@@ -648,4 +660,4 @@ def _importances(model: Model, trainer: Trainer) -> dict[str, float] | None:
         return None
 
 
-__all__ = ["Model", "log_predictions"]
+__all__ = ["Model", "log_predictions", "current_request"]

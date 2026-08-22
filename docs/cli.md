@@ -243,6 +243,16 @@ The distinction it draws is the one that matters before a promotion: 200 fixed
 against 3 broken is an improvement, 38 fixed against 40 broken is a coin, and a
 rule that counts broken rows calls both of them a regression.
 
+`--from-log` compares the two versions on requests they *already* answered,
+rather than scoring a dataset now. That needs a
+[shadow deployment](serving.md#shadow-deployment) — both versions answering the
+same traffic — and the report then carries no `fixed`/`broke`, because
+production traffic has no labels:
+
+```bash
+python manage.py diff reviews.Sentiment 4 5 --from-log --since 24h
+```
+
 With no version numbers it compares what is in production against the newest —
 which is the question you have when you are about to promote something.
 

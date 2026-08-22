@@ -470,6 +470,10 @@ class Prediction(Base):
     inputs: Mapped[Any] = mapped_column(JSON, default=dict)
     output: Mapped[Any] = mapped_column(JSON, nullable=True)
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: Shared by every version that answered one request, so a shadow row and
+    #: the row it shadowed can be paired. Matching on inputs instead would fuse
+    #: two callers who happened to ask the same question.
+    request_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     @property

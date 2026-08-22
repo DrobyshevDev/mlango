@@ -79,6 +79,7 @@ profiles all work and mlango never handles a secret it does not have to. Point
 | `SEED` | `1337` | Seeds python, numpy and torch at the start of every run |
 | `DEFAULT_CALLBACKS` | `[]` | Callbacks appended to every run |
 | `PREDICTION_LOG` | off | What a served model records about its requests |
+| `SHADOW` | off | Run a candidate version beside the served one |
 
 ```python
 TRAINERS = {"lightgbm": "myproject.trainers.LightGBMTrainer"}
@@ -104,6 +105,14 @@ The log is what `manage.py drift` measures against a version's training profile.
 It is off by default because it is a copy of user input in a database — a
 decision a project makes rather than one it wakes up with. See
 [Monitoring](monitoring.md).
+
+```python
+SHADOW = {"ENABLED": True, "STAGE": "staging", "SAMPLE": 0.1}
+```
+
+Answers every request twice — production replies, the candidate runs on the
+same input — so two versions can be compared on real traffic. See
+[Shadow deployment](serving.md#shadow-deployment).
 
 ## Agents
 

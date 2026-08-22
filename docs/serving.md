@@ -226,6 +226,66 @@ Before you go public:
 - `METASTORE` pointing at Postgres if more than one worker writes runs
 - `STORAGE` pointing at shared storage if workers must see each other's artifacts
 
+## Shadow deployment { #shadow-deployment }
+
+A dataset says how a candidate does on rows you curated. It cannot say what the
+candidate would have told the people who actually asked — and before labels
+arrive, that is the only evidence there is.
+
+Promote the candidate to `staging`, leave production where it is, and turn the
+shadow on:
+
+```python title="myproject/settings.py"
+PREDICTION_LOG = {"ENABLED": True, "SAMPLE": 1.0}
+SHADOW = {
+    "ENABLED": True,
+    "STAGE": "staging",   # where the candidate comes from
+    "SAMPLE": 0.1,        # a tenth of requests is usually enough
+}
+```
+
+```bash
+python manage.py train reviews.Sentiment -p C=4.0
+python manage.py diff reviews.Sentiment          # promote-worthy on your own data?
+# then, in the admin or from Python:
+#   Sentiment.promote(5, "staging")
+```
+
+Every request is then answered twice: production replies to the caller, the
+candidate runs on the same input, and both are logged against one request id.
+After a day of traffic:
+
+```bash
+python manage.py diff reviews.Sentiment 4 5 --from-log --since 24h --show-changes 20
+```
+
+```
+reviews.Sentiment v4 → v5 on 2841 rows of the prediction log
+
+  agreement      96.8%
+  changed        91 row(s)
+    neg → pos                61
+    pos → neg                30
+
+  The data carries no labels, so this says what changed, not what improved.
+```
+
+**The caller is never affected.** Production answers; the shadow's output goes
+to the log and nowhere near the response. A candidate that raises is recorded as
+a warning and the request still succeeds — a feature meant to make promotion
+safer must not be able to cause an outage.
+
+**There are no labels here, and the report says so.** Production traffic arrives
+unlabelled, which is the whole reason a shadow is worth running. `fixed` and
+`broke` need a truth column and are absent; what you get is agreement and the
+list of requests the two versions would have answered differently. Read those.
+
+**It costs what it looks like it costs.** Both versions run, so `SAMPLE` is the
+control: at `0.1` the endpoint does 1.1× the work and still pairs hundreds of
+requests a day. A candidate that resolves to the same version as the one being
+served is skipped rather than compared with itself — which is what would happen
+on an endpoint serving `latest` right after a promotion to staging.
+
 ## Training somewhere else { #training-somewhere-else }
 
 A laptop is a fine place to declare a model and a poor place to fit one. What

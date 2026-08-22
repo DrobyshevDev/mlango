@@ -138,6 +138,97 @@ def compare_predictors(
     return report
 
 
+def compare_from_log(
+    model_class: Any,
+    left: int,
+    right: int,
+    *,
+    since: Any = None,
+    limit: int = 10_000,
+    tolerance: float = DEFAULT_TOLERANCE,
+    max_changes: int = 0,
+) -> dict[str, Any]:
+    """Diff two versions using predictions they already made, not new ones.
+
+    A shadow deployment answers the question a dataset cannot: not "how would
+    the candidate do on the rows I curated" but "what would it have said to the
+    people who actually asked". Both versions answered the same request, so
+    they are paired by request id rather than by input — two callers who happen
+    to ask the same question are two requests, and fusing them would invent
+    agreement that was never observed.
+
+    There is no ground truth here. Production traffic arrives unlabelled, which
+    is the whole reason a shadow is worth running before the labels exist.
+    """
+    from sqlalchemy import select
+
+    from mlango.metastore.models import Prediction, utcnow
+    from mlango.metastore.session import session_scope
+
+    label = model_class._meta.label
+    statement = select(Prediction).where(
+        Prediction.label == label,
+        Prediction.version.in_([left, right]),
+        Prediction.request_id.is_not(None),
+    )
+    if since is not None:
+        statement = statement.where(Prediction.created_at >= utcnow() - since)
+
+    with session_scope() as session:
+        rows = list(session.execute(statement.order_by(Prediction.id.desc())).scalars())
+
+    paired: dict[str, dict[int, Any]] = {}
+    for row in rows:
+        paired.setdefault(str(row.request_id), {})[int(row.version or 0)] = row
+
+    both = [r for r, sides in paired.items() if left in sides and right in sides]
+    if not both:
+        raise LookupError(
+            f"No request was answered by both v{left} and v{right} of {label}. "
+            f"Shadowing writes a row per version per request — check that "
+            f"SHADOW and PREDICTION_LOG are both on, and that traffic has arrived since."
+        )
+
+    # Newest first out of the query; oldest first reads better in a report.
+    both.reverse()
+    left_out = [paired[r][left].output for r in both]
+    right_out = [paired[r][right].output for r in both]
+    records = [{"input": paired[r][left].inputs} for r in both]
+
+    task = model_class.get_task()
+    report: dict[str, Any] = {
+        "label": label,
+        "left": left,
+        "right": right,
+        "task": task,
+        "dataset": "the prediction log",
+        "rows": len(both),
+        # Nothing in a request says what the right answer was.
+        "labelled": False,
+        "source": "log",
+    }
+    if task == "regression":
+        report.update(_numeric_diff(left_out, right_out, tolerance))
+    else:
+        report.update(_categorical_diff(left_out, right_out))
+
+    if max_changes:
+        changed = [
+            index
+            for index, (a, b) in enumerate(zip(left_out, right_out, strict=True))
+            if _differs(a, b, task, tolerance)
+        ]
+        report["changes"] = [
+            {
+                "input": records[index]["input"],
+                "left": left_out[index],
+                "right": right_out[index],
+            }
+            for index in changed[:max_changes]
+        ]
+    return report
+
+
 # --------------------------------------------------------------------------- #
 # The diff itself
 # --------------------------------------------------------------------------- #
@@ -242,6 +333,7 @@ def _as_input(record: dict[str, Any], features: list[str]) -> Any:
 
 __all__ = [
     "compare_versions",
+    "compare_from_log",
     "compare_predictors",
     "significance",
     "DEFAULT_TOLERANCE",

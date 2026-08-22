@@ -30,6 +30,15 @@ class Command(BaseCommand):
             help="Two version numbers. Omit to compare production against the newest.",
         )
         parser.add_argument("--dataset", help="Score this dataset instead of the declared one.")
+        parser.add_argument(
+            "--from-log",
+            action="store_true",
+            help="Compare what the two versions already answered on real traffic, "
+            "instead of scoring a dataset now. Needs a shadow deployment.",
+        )
+        parser.add_argument(
+            "--since", default="", metavar="WINDOW", help="Window for --from-log: 24h, 7d, 4w."
+        )
 
         # An agent has no version number, so the pair to compare is two runs of
         # its evaluation suite. Same question, same arithmetic, different rows.
@@ -124,14 +133,26 @@ class Command(BaseCommand):
                 if options["dataset"]:
                     queryset = apps.get_dataset(options["dataset"]).objects.get_queryset()
 
-                report = compare_versions(
-                    model_class,
-                    left,
-                    right,
-                    queryset=queryset,
-                    limit=options.get("limit"),
-                    max_changes=options["show_changes"],
-                )
+                if options["from_log"]:
+                    from mlango.training.comparison import compare_from_log
+
+                    report = compare_from_log(
+                        model_class,
+                        left,
+                        right,
+                        since=_parse_window(options["since"]) if options["since"] else None,
+                        limit=options.get("limit") or 10_000,
+                        max_changes=options["show_changes"],
+                    )
+                else:
+                    report = compare_versions(
+                        model_class,
+                        left,
+                        right,
+                        queryset=queryset,
+                        limit=options.get("limit"),
+                        max_changes=options["show_changes"],
+                    )
         except LookupError as exc:
             raise CommandError(str(exc)) from exc
         except MlangoError as exc:
@@ -508,6 +529,18 @@ def _length(value: Any) -> str:
     if value is None:
         return "unset"
     return f"{len(str(value))} chars"
+
+
+def _parse_window(value: str) -> Any:
+    """``24h``/``7d``/``4w`` to a timedelta, spelled the way `drift` spells it."""
+    import datetime as dt
+    import re
+
+    match = re.match(r"^(\d+)([hdw])$", value.strip().lower())
+    if not match:
+        raise CommandError(f"--since expects a window like 24h, 7d or 4w, got {value!r}.")
+    amount, unit = match.groups()
+    return dt.timedelta(**{{"h": "hours", "d": "days", "w": "weeks"}[unit]: int(amount)})
 
 
 def _default_alpha() -> float:

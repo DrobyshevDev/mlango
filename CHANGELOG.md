@@ -17,6 +17,21 @@ All notable changes to this project are documented here. The format follows
   gates a prompt change the way it already gates a promotion. Cases present in
   only one run are named rather than folded into the totals, because a suite
   that grew is a different suite.
+- **Shadow deployment.** With `SHADOW` on, every request is answered twice:
+  production replies to the caller and the candidate at `staging` runs on the
+  same input, both logged against one request id. `manage.py diff A B --from-log`
+  then compares two versions on what they actually answered to real people,
+  which is the question a promotion is about and the only one available before
+  labels exist. The caller is never affected — a candidate that raises is a
+  logged warning, not an outage — and `SAMPLE` bounds the cost. A candidate that
+  resolves to the same version as the served one is skipped rather than compared
+  with itself, which is what an endpoint serving `latest` would otherwise do
+  right after a promotion to staging.
+- `Prediction.request_id` pairs the rows one request produced. Matching on
+  inputs instead would fuse two callers who happened to ask the same question.
+- `mlango.training.model.current_request` is the ContextVar the serving layer
+  sets so that `predict()`, which knows nothing about shadows, still logs rows
+  that can be paired.
 - **Agents have versions.** Models had a registry, stages and `promote()`; an
   agent had none of it, though its behaviour is entirely its declaration. One is
   recorded the first time an agent runs and again whenever the prompt, model or

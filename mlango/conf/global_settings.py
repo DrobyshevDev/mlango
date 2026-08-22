@@ -85,6 +85,20 @@ PREDICTION_LOG: dict[str, object] = {
     "MAX_ROWS": 100_000,
 }
 
+#: Run a candidate version beside the one being served, on the same requests,
+#: and log both. Off by default: it doubles the work an endpoint does, and a
+#: framework that silently doubled your inference bill would deserve what it got.
+#:
+#: ``STAGE`` names where the candidate comes from — ``staging`` by convention,
+#: so promoting to staging is what starts the shadow. ``SAMPLE`` bounds the
+#: cost: 0.1 shadows a tenth of requests, which is usually enough to compare
+#: two versions within a day.
+SHADOW: dict[str, object] = {
+    "ENABLED": False,
+    "STAGE": "staging",
+    "SAMPLE": 1.0,
+}
+
 # --- Agents -----------------------------------------------------------------
 
 #: LLM providers available to ``Agent.provider``.
