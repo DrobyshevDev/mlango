@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `RecordingProvider` and `ReplayProvider` record an agent's model calls to a
+  file and play them back. An eval suite with an agent in it otherwise talks to
+  a model: slow, paid for by the call, and different every time. A cassette is a
+  `Provider`, so the agent, loop, tools and tracing are the real ones and only
+  the model is absent.
+- `Agent.run()` and `Agent.stream()` take `provider=` to override the declared
+  one for that call. That is the seam recording hangs off, and being an argument
+  rather than a setting is what stops a recording leaking into the next test.
+
 ## 0.3.0 — 2026-08-22
 
 0.2.0 answered questions about a single version: why did it say that, has the

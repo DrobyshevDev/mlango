@@ -166,11 +166,18 @@ class Agent(Declarative):
         history: list[dict[str, Any]] | None = None,
         max_steps: int | None = None,
         run_id: int | None = None,
+        provider: Provider | None = None,
         **provider_kwargs: Any,
     ) -> AgentRun:
-        """Run the tool-use loop until the model stops asking for tools."""
+        """Run the tool-use loop until the model stops asking for tools.
+
+        ``provider`` overrides the declared one for this call. That is the seam
+        recording and replay hang off: a cassette is a Provider, so a test can
+        run the real agent against a recorded conversation without the agent
+        knowing, and without a setting that would leak into the next test.
+        """
         opts = type(self)._meta
-        provider = self.get_provider()
+        provider = provider or self.get_provider()
         toolbox = self.get_tools()
         store = memory if memory is not None else self.get_memory()
         limit = max_steps or self.get_max_steps()
@@ -225,6 +232,7 @@ class Agent(Declarative):
         history: list[dict[str, Any]] | None = None,
         max_steps: int | None = None,
         run_id: int | None = None,
+        provider: Provider | None = None,
         **provider_kwargs: Any,
     ) -> Iterator[AgentEvent]:
         """Run the loop, yielding events as they happen.
@@ -238,7 +246,7 @@ class Agent(Declarative):
                     print(event.text, end="", flush=True)
         """
         opts = type(self)._meta
-        provider = self.get_provider()
+        provider = provider or self.get_provider()
         toolbox = self.get_tools()
         store = memory if memory is not None else self.get_memory()
         limit = max_steps or self.get_max_steps()

@@ -1,6 +1,12 @@
 """Agents: declared LLM agents with tools, memory and full tracing."""
 
 from mlango.agents.agent import Agent, AgentRun
+from mlango.agents.cassette import (
+    Cassette,
+    CassetteError,
+    RecordingProvider,
+    ReplayProvider,
+)
 from mlango.agents.events import (
     AgentEvent,
     Failed,
@@ -33,6 +39,10 @@ from mlango.agents.tracing import Tracer, get_trace, recent_traces
 __all__ = [
     "Agent",
     "AgentRun",
+    "Cassette",
+    "CassetteError",
+    "RecordingProvider",
+    "ReplayProvider",
     "AgentEvent",
     "Started",
     "Thinking",
