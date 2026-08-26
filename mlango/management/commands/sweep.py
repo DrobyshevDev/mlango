@@ -35,6 +35,15 @@ class Command(BaseCommand):
         parser.add_argument("--name", default="", help="Name for the sweep run.")
         parser.add_argument("--tag", action="append", default=[], help="Tag every run.")
         parser.add_argument(
+            "--workers",
+            type=int,
+            default=1,
+            metavar="N",
+            help="Run N trials at once. Threads, so it helps for backends whose "
+            "numeric work releases the GIL (sklearn, torch). The seed is "
+            "process-global, so concurrent trials do not each start from it.",
+        )
+        parser.add_argument(
             "--promote-best",
             metavar="STAGE",
             help="Promote the winning version to this stage, e.g. production.",
@@ -74,6 +83,7 @@ class Command(BaseCommand):
             name=options["name"],
             tags=options["tag"] or None,
             promote_best=options.get("promote_best"),
+            workers=max(1, int(options.get("workers") or 1)),
             on_trial=report,
         )
 

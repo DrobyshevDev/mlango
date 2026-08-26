@@ -119,6 +119,21 @@ python manage.py sweep reviews.Sentiment -p C=0.25,1,4 \
 | `--materialize` | Freeze the training view into a dataset version first |
 | `--no-register` | Train without adding to the registry |
 
+Trials run one after another by default. `--workers` runs them together:
+
+```bash
+python manage.py sweep reviews.Sentiment -p C=0.25,1,4 --workers 4
+```
+
+Threads, not processes — settings and the registry are already shared, the
+metastore is SQLite in WAL mode built for overlapping readers and writers, and
+the numeric work in sklearn and torch releases the GIL.
+
+One honest cost: **the RNG seed is process-global**, so concurrent trials no
+longer each begin from the same state. A sweep is a search rather than a number
+to reproduce, which is why the option exists — re-run the winning point on its
+own if you need its exact score back.
+
 ### Prediction
 
 Scoring without starting a server. The model comes from the registry, so this

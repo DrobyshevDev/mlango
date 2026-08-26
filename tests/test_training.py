@@ -609,3 +609,45 @@ class TestComparison:
         empty = reviews.objects.filter(label="nonexistent")
         with pytest.raises(LookupError, match="no rows"):
             compare_versions(sentiment, left, right, queryset=empty)
+
+
+class TestConcurrentRegistration:
+    """Two trainings of one model racing for the next version number.
+
+    Not a thread problem specifically: two `manage.py train` invocations or two
+    container workers collide the same way, which is why the fix is a retry
+    rather than a lock.
+    """
+
+    def test_concurrent_trainings_each_get_a_version(self, project, sentiment):
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            models = list(pool.map(lambda c: sentiment.fit(C=c), [0.1, 0.5, 1.0, 2.0]))
+
+        numbers = sorted(model._version.version for model in models)
+        assert numbers == [1, 2, 3, 4], "nobody lost their number to a racer"
+
+    def test_the_registry_agrees_with_what_was_handed_back(self, project, sentiment):
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            list(pool.map(lambda c: sentiment.fit(C=c), [0.1, 0.5, 1.0]))
+
+        stored = sorted(v.version for v in sentiment.versions())
+        assert stored == [1, 2, 3]
+
+    def test_it_gives_up_rather_than_looping_forever(self, project, sentiment, monkeypatch):
+        """A retry that never surrenders would turn contention into a hang."""
+        from sqlalchemy.exc import IntegrityError
+
+        from mlango.metastore import session as session_module
+
+        def always_collide(*args, **kwargs):
+            raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+
+        from mlango.core.exceptions import RunError
+
+        monkeypatch.setattr(session_module, "session_scope", always_collide)
+        with pytest.raises((IntegrityError, RunError)):
+            sentiment.fit()

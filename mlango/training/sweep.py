@@ -9,9 +9,12 @@ the whole search as a unit and every trial keeps its own full record.
 
 from __future__ import annotations
 
+import concurrent.futures
+import functools
 import itertools
 import logging
 import random
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -109,6 +112,50 @@ def sample_space(
     return rng.sample(grid, n)
 
 
+def _run_trial(
+    model_class: ModelClass,
+    index: int,
+    params: dict[str, Any],
+    *,
+    metric: str,
+    name: str,
+    tags: list[str],
+    train_kwargs: dict[str, Any],
+) -> Trial:
+    """One point in the space, with its failure recorded rather than raised.
+
+    A bad corner of a search space should cost that corner and nothing else,
+    which matters more when trials run concurrently: one raising thread would
+    otherwise take the pool down with the results already collected.
+    """
+    trial = Trial(index=index, params=params)
+    opts = model_class._meta
+
+    try:
+        model = model_class(**params)
+        child = model.train(
+            name=f"{name or opts.object_name}-trial{index}", tags=tags, **train_kwargs
+        )
+        trial.run_uuid = child.uuid
+        record = child.refresh()
+        trial.status = record.status if record else RunStatus.FAILED
+        summary = (record.summary if record else None) or {}
+        value = summary.get(metric)
+        trial.score = float(value) if isinstance(value, (int, float)) else None
+
+        if trial.score is None:
+            trial.error = (
+                f"Trial finished but recorded no {metric!r}. "
+                f"Available: {', '.join(sorted(summary)) or '(none)'}."
+            )
+    except Exception as exc:  # noqa: BLE001 - recorded, then the sweep continues
+        trial.status = RunStatus.FAILED
+        trial.error = f"{type(exc).__name__}: {exc}"
+        logger.warning("Trial %s of %s failed: %s", index, opts.label, exc)
+
+    return trial
+
+
 def run_sweep(
     model_class: ModelClass,
     space: dict[str, list[Any]],
@@ -122,6 +169,7 @@ def run_sweep(
     tags: list[str] | None = None,
     notes: str = "",
     promote_best: str | None = None,
+    workers: int = 1,
     on_trial: Any = None,
     **train_kwargs: Any,
 ) -> SweepResult:
@@ -129,6 +177,13 @@ def run_sweep(
 
     A failing trial is recorded and the sweep continues — one bad corner of the
     search space should not throw away the trials that already succeeded.
+
+    ``workers`` above 1 runs trials concurrently in threads. That is a real
+    speed-up for sklearn and torch, whose numeric work releases the GIL, and it
+    carries one honest cost: the RNG seed is process-global, so concurrent
+    trials no longer each begin from the same state. A sweep is a search rather
+    than a result to reproduce, which is why the option exists — but re-run the
+    winning point on its own if you need its exact number back.
     """
     opts = model_class._meta
 
@@ -177,39 +232,47 @@ def run_sweep(
     result.run_uuid = parent.uuid
     sweep_tag = f"sweep:{parent.short_id}"
 
+    run_one = functools.partial(
+        _run_trial,
+        model_class,
+        metric=metric,
+        name=name,
+        tags=[*(tags or []), sweep_tag],
+        train_kwargs=train_kwargs,
+    )
+
     with parent:
-        for index, params in enumerate(points, start=1):
-            trial = Trial(index=index, params=params)
-            result.trials.append(trial)
+        if workers > 1:
+            done = threading.Lock()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(run_one, index, params): index
+                    for index, params in enumerate(points, start=1)
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    trial = future.result()
+                    # Serialised so a callback that prints does not interleave
+                    # two trials mid-line.
+                    with done:
+                        result.trials.append(trial)
+                        if on_trial is not None:
+                            on_trial(trial, result)
+            # Sorted afterwards: trials finish out of order, and a report whose
+            # rows jump around is harder to read than one that waits.
+            result.trials.sort(key=lambda t: t.index)
+        else:
+            for index, params in enumerate(points, start=1):
+                trial = run_one(index, params)
+                result.trials.append(trial)
+                if on_trial is not None:
+                    on_trial(trial, result)
 
-            try:
-                model = model_class(**params)
-                child = model.train(
-                    name=f"{name or opts.object_name}-trial{index}",
-                    tags=[*(tags or []), sweep_tag],
-                    **train_kwargs,
-                )
-                trial.run_uuid = child.uuid
-                record = child.refresh()
-                trial.status = record.status if record else RunStatus.FAILED
-                summary = (record.summary if record else None) or {}
-                value = summary.get(metric)
-                trial.score = float(value) if isinstance(value, (int, float)) else None
-
-                if trial.score is None:
-                    trial.error = (
-                        f"Trial finished but recorded no {metric!r}. "
-                        f"Available: {', '.join(sorted(summary)) or '(none)'}."
-                    )
-            except Exception as exc:  # noqa: BLE001 - recorded, then the sweep continues
-                trial.status = RunStatus.FAILED
-                trial.error = f"{type(exc).__name__}: {exc}"
-                logger.warning("Trial %s of %s failed: %s", index, opts.label, exc)
-
+        # Logged after the pool rather than inside it: the parent's metric
+        # buffer is not built for concurrent writers, and a sweep's curve is
+        # only meaningful in trial order anyway.
+        for trial in result.trials:
             if trial.score is not None:
-                parent.log_metric(metric, trial.score, step=index)
-            if on_trial is not None:
-                on_trial(trial, result)
+                parent.log_metric(metric, trial.score, step=trial.index)
 
         best = result.best
         if best is not None:

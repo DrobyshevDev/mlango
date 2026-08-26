@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -19,6 +20,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from mlango.metastore.models import Base
 
 logger = logging.getLogger("mlango.metastore")
+
+#: Guards the create-then-record below. Held only on the first touch of a
+#: URL, so it costs one uncontended acquisition per process afterwards.
+_schema_lock = threading.Lock()
 
 _engines: dict[str, Engine] = {}
 _sessionmakers: dict[str, sessionmaker[Session]] = {}
@@ -94,9 +99,17 @@ def ensure_schema(url: str | None = None) -> None:
     url = url or metastore_url()
     if url in _ensured:
         return
-    create_all(url)
-    align_schema(url)
-    _ensured.add(url)
+
+    # Checked, created, recorded — with nothing holding the gap, two threads
+    # reaching an untouched metastore together both decide to create it and the
+    # loser gets "table already exists". A threaded server answering its first
+    # two requests at once is the ordinary way to meet this.
+    with _schema_lock:
+        if url in _ensured:
+            return
+        create_all(url)
+        align_schema(url)
+        _ensured.add(url)
 
 
 def new_session(url: str | None = None) -> Session:

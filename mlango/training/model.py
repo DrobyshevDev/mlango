@@ -37,6 +37,12 @@ from mlango.training.trainer import Trainer, get_trainer
 
 logger = logging.getLogger("mlango.model")
 
+#: How many times to re-read the highest version number when another
+#: training takes it first. Three is plenty: each retry re-reads, so the
+#: only way to exhaust them is contention far beyond what a laptop sweep
+#: produces.
+VERSION_ATTEMPTS = 3
+
 #: The request a prediction belongs to, set by the serving layer so a shadow
 #: row and the row it shadowed can be paired later. A ContextVar rather than an
 #: argument because predict() is called by user code that has no idea a shadow
@@ -311,6 +317,7 @@ class Model(Declarative):
         baseline: dict[str, Any] | None = None,
     ) -> None:
         from sqlalchemy import func, select
+        from sqlalchemy.exc import IntegrityError
 
         from mlango.metastore.models import ModelVersion
         from mlango.metastore.session import session_scope
@@ -320,25 +327,46 @@ class Model(Declarative):
         path = trainer.save(self, self._fitted, f"models/{opts.label.replace('.', '/')}/{run.uuid}")
         run.log_artifact("model", path, kind="model")
 
-        with session_scope() as session:
-            highest = session.execute(
-                select(func.max(ModelVersion.version)).where(ModelVersion.label == opts.label)
-            ).scalar()
-            version = ModelVersion(
-                label=opts.label,
-                version=(highest or 0) + 1,
-                fingerprint=opts.fingerprint(),
-                run_id=run.run_id,
-                path=path,
-                params=_jsonable(params),
-                metrics=_jsonable(summary),
-                importances=_importances(self, trainer),
-                baseline=baseline,
-                stage=Stage.NONE,
-            )
-            session.add(version)
-            session.flush()
-            self._version = version
+        # Reading the highest version and inserting the next one is a
+        # read-then-write, and nothing holds the gap. Two trainings of the same
+        # model racing — a parallel sweep, two workers, two terminals — both
+        # read the same maximum and the unique constraint rejects the loser,
+        # whose run then finishes having registered nothing.
+        #
+        # Retried rather than locked: the racers are not necessarily threads,
+        # and an in-process lock cannot see another process.
+        for attempt in range(VERSION_ATTEMPTS):
+            try:
+                with session_scope() as session:
+                    highest = session.execute(
+                        select(func.max(ModelVersion.version)).where(
+                            ModelVersion.label == opts.label
+                        )
+                    ).scalar()
+                    version = ModelVersion(
+                        label=opts.label,
+                        version=(highest or 0) + 1,
+                        fingerprint=opts.fingerprint(),
+                        run_id=run.run_id,
+                        path=path,
+                        params=_jsonable(params),
+                        metrics=_jsonable(summary),
+                        importances=_importances(self, trainer),
+                        baseline=baseline,
+                        stage=Stage.NONE,
+                    )
+                    session.add(version)
+                    session.flush()
+                    self._version = version
+                break
+            except IntegrityError:
+                if attempt == VERSION_ATTEMPTS - 1:
+                    raise
+                # Someone took the number between the read and the write. Wait
+                # a moment so the two do not collide again in lockstep, then
+                # re-read the maximum.
+                time.sleep(random.uniform(0.01, 0.05) * (attempt + 1))
+                logger.debug("Version number for %s was taken; retrying", opts.label)
 
         model_registered.send(sender=type(self), model=self, version=self._version)
         logger.info("Registered %s", self._version.ref)

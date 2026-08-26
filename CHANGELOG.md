@@ -16,6 +16,33 @@ All notable changes to this project are documented here. The format follows
 - `Agent.run()` and `Agent.stream()` take `provider=` to override the declared
   one for that call. That is the seam recording hangs off, and being an argument
   rather than a setting is what stops a recording leaking into the next test.
+- `manage.py sweep --workers N` runs trials concurrently. Threads rather than
+  processes: settings and the registry are already shared, the metastore is
+  built for overlapping access, and sklearn and torch release the GIL for the
+  numeric work. The seed is process-global, so concurrent trials no longer each
+  start from it — said plainly in the help and the docs, because a sweep is a
+  search rather than a number to reproduce.
+- `examples/promotion/` reproduces the comparison the README opens with, in one
+  command and with no project to set up.
+
+### Fixed
+
+- **Two trainings of the same model racing for a version number lost one of
+  them.** `SELECT max(version)` then `INSERT max+1` is a read-then-write with
+  nothing holding the gap, so the loser hit the unique constraint and its run
+  finished having registered nothing. Retried rather than locked, because the
+  racers need not be threads: two `manage.py train` invocations collide the same
+  way and an in-process lock cannot see them. Found by the first parallel sweep.
+- **Two threads reaching an untouched metastore both created it**, and the loser
+  got `table already exists`. A threaded server answering its first two requests
+  at once is the ordinary way to meet this; schema creation now holds a lock.
+
+### Changed
+
+- The README leads with what mlango does that nothing else does — telling you
+  what a new model version broke before you promote it — rather than with the
+  category it belongs to. The Django framing stays, as the *how*.
+
 
 ## 0.3.0 — 2026-08-22
 
