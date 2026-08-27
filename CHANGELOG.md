@@ -16,6 +16,18 @@ All notable changes to this project are documented here. The format follows
 - `Agent.run()` and `Agent.stream()` take `provider=` to override the declared
   one for that call. That is the seam recording hangs off, and being an argument
   rather than a setting is what stops a recording leaking into the next test.
+- **`manage.py diff --format markdown`.** The report is a decision one person
+  made as long as it only exists in a terminal, and promoting a model is rarely
+  one person's decision. This renders the same comparison for a pull request:
+  the broken count in the heading, because a comment is first read as a
+  notification, and the disagreeing rows folded away, because one two hundred
+  rows tall is one nobody scrolls. A pure function of the report dictionary, so
+  it covers all four things `diff` compares — registered versions, evaluation
+  runs, files mlango never trained, and shadow traffic — without knowing any of
+  them exist. `--output PATH` writes it without touching the exit code, so a CI
+  job can keep the report and still fail on it, and every report opens with a
+  stable marker so a job can edit its own last comment instead of leaving a
+  thread. `docs/ci.md` has the workflow.
 - **`manage.py promote`.** The workflow this project leads with ended one step
   short: the framework could say what a new version broke and could promote one
   from Python or the admin, but not from a terminal. `--check` closes the loop

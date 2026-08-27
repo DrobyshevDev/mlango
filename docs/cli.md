@@ -289,6 +289,18 @@ python manage.py diff reviews.Sentiment --fail-on-regression
 python manage.py diff reviews.Sentiment --fail-on-regression significant
 ```
 
+Three renderings, one report. `--format markdown` produces something meant to be
+posted in a pull request rather than read in a terminal, and `--output` writes it
+to a file without touching the exit code — so a CI job can keep the report and
+still go red:
+
+```bash
+python manage.py diff reviews.Sentiment     --format markdown --show-changes 20     --output diff.md --fail-on-regression significant
+```
+
+`--json` is the older spelling of `--format json` and still means what it meant.
+The workflow around this is in [Continuous integration](ci.md).
+
 ### Promoting a version
 
 The other half of the diff. `promote` moves a model or agent version to a

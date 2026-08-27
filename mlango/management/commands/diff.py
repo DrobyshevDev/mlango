@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from mlango.management.base import BaseCommand, CommandError
+from mlango.management.base import BaseCommand, CommandError, Style
 
 
 class Command(BaseCommand):
@@ -87,7 +87,23 @@ class Command(BaseCommand):
             metavar="N",
             help="Print up to N rows where the two disagree.",
         )
+        parser.add_argument(
+            "--format",
+            dest="format",
+            choices=["text", "markdown", "json"],
+            default=None,
+            help="How to render the report. 'markdown' is meant for a pull "
+            "request comment; 'text' is the default and is meant for a terminal.",
+        )
+        # The older spelling of --format json, kept because it is released API.
         parser.add_argument("--json", action="store_true", help="Emit the report as JSON.")
+        parser.add_argument(
+            "--output",
+            metavar="PATH",
+            help="Write the report to this file instead of stdout. The exit "
+            "code from --fail-on-regression is unaffected, so a CI job can "
+            "keep the report and still fail on it.",
+        )
         # Was a flag; now a flag with an optional mode, so the old spelling
         # still means what it meant.
         parser.add_argument(
@@ -158,10 +174,14 @@ class Command(BaseCommand):
         except MlangoError as exc:
             raise CommandError(str(exc)) from exc
 
-        if options["json"]:
-            self.write(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        rendered = self._render(report, options)
+        if options["output"]:
+            import pathlib
+
+            pathlib.Path(options["output"]).write_text(rendered, encoding="utf-8")
+            self.ok(f"Wrote the report to {options['output']}")
         else:
-            self._report(report)
+            self.write(rendered.rstrip("\n"))
 
         if options["fail_on_regression"]:
             from mlango.training.comparison import DEFAULT_ALPHA
@@ -310,6 +330,32 @@ class Command(BaseCommand):
         return live.version, newest.version
 
     # -- output --------------------------------------------------------------
+
+    def _render(self, report: dict[str, Any], options: dict[str, Any]) -> str:
+        """The report as a string, in whichever of the three shapes was asked for."""
+        import contextlib
+        import io
+
+        which = options["format"] or ("json" if options["json"] else "text")
+        if which == "json":
+            return json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n"
+        if which == "markdown":
+            from mlango.core.markdown import render
+
+            return render(report)
+
+        # The terminal renderer writes as it goes, so it is captured rather
+        # than written twice. Colours are dropped when the destination is a
+        # file: escape codes in something a person will read later help nobody.
+        buffer = io.StringIO()
+        style = self.style
+        self.style = Style(enabled=style.enabled and not options["output"])
+        try:
+            with contextlib.redirect_stdout(buffer):
+                self._report(report)
+        finally:
+            self.style = style
+        return buffer.getvalue()
 
     def _report(self, report: dict[str, Any]) -> None:
         if report.get("kind") == "eval":

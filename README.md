@@ -42,7 +42,9 @@ not — and `broke` is the only place that number appears. Reproduce it with
 [`examples/promotion/`](https://github.com/DrobyshevDev/mlango/tree/master/examples/promotion).
 
 `--fail-on-regression` turns that into an exit code you can put in front of a
-promotion. The same command compares **two runs of an agent's eval suite**
+promotion, `manage.py promote --check` puts the same rule on the promotion
+itself, and `--format markdown` posts the comparison into the pull request where
+the rest of the team is. The same command compares **two runs of an agent's eval suite**
 (prompts have no version numbers, so it diffs the runs and tells you what you
 changed), **two model files mlango never trained**, and **what a candidate would
 have answered on live traffic** if you run it as a shadow.
