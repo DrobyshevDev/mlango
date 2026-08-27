@@ -287,6 +287,54 @@ python manage.py diff reviews.Sentiment --fail-on-regression
 python manage.py diff reviews.Sentiment --fail-on-regression significant
 ```
 
+### Промоут версии
+
+Вторая половина сравнения. `promote` переводит версию модели или агента в
+стадию, а `--check` сначала сравнивает её с тем, кто эту стадию занимает, — и
+отказывает, если кандидат потерял строки.
+
+```bash
+python manage.py promote reviews.Sentiment 4                     # в production
+python manage.py promote reviews.Sentiment                       # последнюю версию
+python manage.py promote reviews.Sentiment 4 --stage staging
+python manage.py promote reviews.Sentiment 4 --check             # не потерять ничего
+python manage.py promote reviews.Sentiment 4 --check significant # не потерять значимого
+```
+
+```
+$ python manage.py promote reviews.Sentiment 2 --check
+
+v1 → v2 on 500 rows of reviews.Reviews
+  accuracy       0.7700 → 0.8060   +0.0360
+  fixed          29 row(s)
+  broke          11 row(s)
+
+error: Refusing to promote: v2 is wrong on 11 row(s) that v1 got right.
+Inspect them with: manage.py diff reviews.Sentiment 1 2 --show-changes 11
+```
+
+Обратите внимание: v2 **точнее**, и строгая проверка всё равно отказывает. Это
+правило — для выверенного набора, где терять нельзя ничего. На реальных данных
+используйте `--check significant`: он пропускает потерю, которую свидетельства
+не отличают от монетки, и отказывает там, где отличают:
+
+```
+  verdict        a real improvement: 29 fixed against 11 broken (p=0.006)
+reviews.Sentiment@v2 is now at stage 'production'.
+```
+
+| Флаг | Что делает |
+|---|---|
+| `--stage NAME` | В какую стадию. По умолчанию `production` |
+| `--check [any\|significant]` | Сначала сравнить с действующей и отказать при регрессии |
+| `--dataset LABEL` | По какому датасету считать `--check` |
+| `-n N` | Ограничить число строк для `--check` |
+
+Один глагол на модели и агентов: версия агента — та же идея, поэтому
+`promote support.Support 3` тоже работает. Для `--check` нужна модель, потому что
+он сравнивает предсказания; для агента сравнивайте два прогона его набора оценок
+через `diff --eval`.
+
 ### Модели, которые обучил не mlango
 
 Сравнению безразлично, откуда взялись две модели: ему нужны два объекта,

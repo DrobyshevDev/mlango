@@ -16,6 +16,12 @@ All notable changes to this project are documented here. The format follows
 - `Agent.run()` and `Agent.stream()` take `provider=` to override the declared
   one for that call. That is the seam recording hangs off, and being an argument
   rather than a setting is what stops a recording leaking into the next test.
+- **`manage.py promote`.** The workflow this project leads with ended one step
+  short: the framework could say what a new version broke and could promote one
+  from Python or the admin, but not from a terminal. `--check` closes the loop
+  the other way — it compares the candidate with whoever holds the stage and
+  refuses the promotion if rows were lost, with `significant` allowing a loss the
+  evidence cannot distinguish from a coin. One verb for models and agents.
 - `manage.py sweep --workers N` runs trials concurrently. Threads rather than
   processes: settings and the registry are already shared, the metastore is
   built for overlapping access, and sklearn and torch release the GIL for the

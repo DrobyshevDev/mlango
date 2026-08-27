@@ -289,6 +289,54 @@ python manage.py diff reviews.Sentiment --fail-on-regression
 python manage.py diff reviews.Sentiment --fail-on-regression significant
 ```
 
+### Promoting a version
+
+The other half of the diff. `promote` moves a model or agent version to a
+stage, and `--check` compares it with whoever holds that stage first — refusing
+the promotion if the candidate lost rows.
+
+```bash
+python manage.py promote reviews.Sentiment 4                     # to production
+python manage.py promote reviews.Sentiment                       # the newest version
+python manage.py promote reviews.Sentiment 4 --stage staging
+python manage.py promote reviews.Sentiment 4 --check             # lose nothing
+python manage.py promote reviews.Sentiment 4 --check significant # lose nothing that matters
+```
+
+```
+$ python manage.py promote reviews.Sentiment 2 --check
+
+v1 → v2 on 500 rows of reviews.Reviews
+  accuracy       0.7700 → 0.8060   +0.0360
+  fixed          29 row(s)
+  broke          11 row(s)
+
+error: Refusing to promote: v2 is wrong on 11 row(s) that v1 got right.
+Inspect them with: manage.py diff reviews.Sentiment 1 2 --show-changes 11
+```
+
+Note that v2 is **more accurate** and the strict check still refuses it. That
+rule is for a curated suite where nothing may be lost. On a real dataset use
+`--check significant`, which allows a loss the evidence cannot distinguish from
+a coin and refuses one it can:
+
+```
+  verdict        a real improvement: 29 fixed against 11 broken (p=0.006)
+reviews.Sentiment@v2 is now at stage 'production'.
+```
+
+| Flag | Effect |
+|---|---|
+| `--stage NAME` | Which stage. Default `production` |
+| `--check [any\|significant]` | Compare with the incumbent first, and refuse a regression |
+| `--dataset LABEL` | Score `--check` against this dataset |
+| `-n N` | Cap the rows `--check` scores |
+
+One verb covers models and agents — an agent version is the same idea, so
+`promote support.Support 3` works too. `--check` needs a model, because it
+compares predictions; for an agent, compare two runs of its evaluation suite
+with `diff --eval`.
+
 ### Models mlango did not train
 
 The comparison does not care where the two models came from — it needs two
