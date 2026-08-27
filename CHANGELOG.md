@@ -67,6 +67,14 @@ All notable changes to this project are documented here. The format follows
   finished having registered nothing. Retried rather than locked, because the
   racers need not be threads: two `manage.py train` invocations collide the same
   way and an in-process lock cannot see them. Found by the first parallel sweep.
+- **The version-number retry gave up too early under real contention.** The
+  budget was three collisions, on the reasoning that each retry re-reads the
+  maximum so three could only be exhausted by something extreme. That was wrong:
+  the attempts a loser needs is the number of racers, because they all read the
+  same maximum and lose one at a time — so four workers already exceeded it, and
+  `sweep --workers` lets a user pick the number. Bounded by time now, which is
+  the thing actually worth bounding. Found by CI on the test written for the
+  original fix.
 - **Two threads reaching an untouched metastore both created it**, and the loser
   got `table already exists`. A threaded server answering its first two requests
   at once is the ordinary way to meet this; schema creation now holds a lock.

@@ -637,17 +637,34 @@ class TestConcurrentRegistration:
         stored = sorted(v.version for v in sentiment.versions())
         assert stored == [1, 2, 3]
 
+    def test_more_racers_than_any_fixed_attempt_budget(self, project, sentiment):
+        """The loser needs as many attempts as there are racers.
+
+        Eight workers all read the same maximum, one wins, and the last one
+        left has to lose seven times before its turn comes. A fixed budget of
+        three collisions fails here, which is how CI found it.
+        """
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            models = list(pool.map(lambda c: sentiment.fit(C=c), [0.1 * n for n in range(1, 9)]))
+
+        assert sorted(m._version.version for m in models) == list(range(1, 9))
+
     def test_it_gives_up_rather_than_looping_forever(self, project, sentiment, monkeypatch):
         """A retry that never surrenders would turn contention into a hang."""
         from sqlalchemy.exc import IntegrityError
 
+        from mlango.core.exceptions import RunError
         from mlango.metastore import session as session_module
+        from mlango.training import model as model_module
 
         def always_collide(*args, **kwargs):
             raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
 
-        from mlango.core.exceptions import RunError
-
+        # The real budget is five seconds of losing, which is the right amount
+        # to wait in production and the wrong amount to wait in a test.
+        monkeypatch.setattr(model_module, "VERSION_RETRY_SECONDS", 0.05)
         monkeypatch.setattr(session_module, "session_scope", always_collide)
         with pytest.raises((IntegrityError, RunError)):
             sentiment.fit()

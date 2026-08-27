@@ -37,11 +37,22 @@ from mlango.training.trainer import Trainer, get_trainer
 
 logger = logging.getLogger("mlango.model")
 
-#: How many times to re-read the highest version number when another
-#: training takes it first. Three is plenty: each retry re-reads, so the
-#: only way to exhaust them is contention far beyond what a laptop sweep
-#: produces.
-VERSION_ATTEMPTS = 3
+#: How long to keep re-reading the highest version number when other trainings
+#: keep taking it first.
+#:
+#: A bound on time rather than on attempts, because the attempts a loser needs
+#: is the number of racers: four workers starting together all read the same
+#: maximum, one wins, and the last one left has to lose three times before its
+#: turn. This code cannot know that number — `sweep --workers` lets a user pick
+#: it — so counting collisions bounds the wrong thing. Fifteen seconds of
+#: nothing but losing is a real problem worth surfacing; three collisions is
+#: four workers on a Tuesday.
+VERSION_RETRY_SECONDS = 15.0
+
+#: Backoff is capped so a long queue of racers does not become a long queue of
+#: sleeps: the two constants together are what decides how much contention
+#: survives, and at a tenth of a second the budget covers about a hundred.
+VERSION_RETRY_MAX_SLEEP = 0.1
 
 #: The request a prediction belongs to, set by the serving layer so a shadow
 #: row and the row it shadowed can be paired later. A ContextVar rather than an
@@ -335,7 +346,9 @@ class Model(Declarative):
         #
         # Retried rather than locked: the racers are not necessarily threads,
         # and an in-process lock cannot see another process.
-        for attempt in range(VERSION_ATTEMPTS):
+        deadline = time.monotonic() + VERSION_RETRY_SECONDS
+        attempt = 0
+        while True:
             try:
                 with session_scope() as session:
                     highest = session.execute(
@@ -360,12 +373,13 @@ class Model(Declarative):
                     self._version = version
                 break
             except IntegrityError:
-                if attempt == VERSION_ATTEMPTS - 1:
+                if time.monotonic() >= deadline:
                     raise
                 # Someone took the number between the read and the write. Wait
                 # a moment so the two do not collide again in lockstep, then
                 # re-read the maximum.
-                time.sleep(random.uniform(0.01, 0.05) * (attempt + 1))
+                attempt += 1
+                time.sleep(min(random.uniform(0.01, 0.05) * attempt, VERSION_RETRY_MAX_SLEEP))
                 logger.debug("Version number for %s was taken; retrying", opts.label)
 
         model_registered.send(sender=type(self), model=self, version=self._version)
