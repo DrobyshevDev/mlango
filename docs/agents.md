@@ -199,6 +199,57 @@ A provider does exactly one thing: turn a request into one response. The loop,
 memory and tracing stay the framework's, so swapping providers never changes
 agent behaviour.
 
+## Recording and replaying
+
+An eval suite with an agent in it talks to a model: slow, paid for by the call,
+and different every time. None of those belong in a test.
+
+A cassette records what the provider said and plays it back. It is a `Provider`,
+so the agent, the loop, the tools and the tracing are the real ones — only the
+model is not there.
+
+```python
+from mlango.agents import RecordingProvider, ReplayProvider
+from mlango.agents.providers import get_provider
+
+# Once, against a live provider. Commit the file.
+SupportAgent().run(
+    "refund please",
+    provider=RecordingProvider(get_provider("anthropic"), "cassettes/refund.json"),
+)
+
+# Afterwards, everywhere, offline and identical.
+SupportAgent().run("refund please", provider=ReplayProvider("cassettes/refund.json"))
+```
+
+`provider=` overrides the declared one for that call only, so a recording cannot
+leak into the next test the way a setting would.
+
+A call is matched by content, so a run whose steps happen in a different order
+still replays. An unrecorded call falls back to the next unused recording, which
+keeps a cassette alive through an edit to the prompt that did not change what
+the model was being asked. Pass `strict=True` when you would rather be told:
+
+```python
+ReplayProvider("cassettes/refund.json", strict=True)
+```
+
+The file is saved after every call rather than at the end, so a run that fails
+on its third step has still recorded the first two.
+
+`stream()` replays from the same cassette as `run()`, and needs nothing extra:
+both share one loop with one call into the provider.
+
+### Why not glia's cassettes
+
+[glia](https://github.com/DrobyshevDev/glia) records the same idea and sharing
+its file would have been tidy. Its shape has nowhere to put
+`Completion.raw_content` — the assistant turn exactly as the provider wants it
+echoed back — and dropping that produces replays that pass against the cassette
+and fail against the real API. glia is also async throughout, where this layer
+is not. So the format is mlango's own.
+
+
 ## Streaming
 
 `run()` returns only when the loop is finished. A multi-step agent can take a

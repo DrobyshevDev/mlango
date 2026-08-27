@@ -449,6 +449,52 @@ class EvalResult(Base):
 # --------------------------------------------------------------------------- #
 
 
+class StageTransition(Base):
+    """One promotion, recorded because ``stage`` only remembers the present.
+
+    The stage on a version row is a mutable column: promoting v3 overwrites
+    what v2 was, so a registry that has been in use for a year can say what is
+    live now and nothing at all about how it got there. The question a
+    post-mortem opens with — what was in production on the fourteenth, and what
+    was it promoted on the strength of — had no answer.
+
+    A row per move, demotions included, so the log reads as a history rather
+    than as a list of winners. The evidence is kept beside the move because a
+    promotion made on a comparison and one made on a hunch are indistinguishable
+    a month later unless the comparison was written down.
+    """
+
+    __tablename__ = "mlango_stage_transitions"
+    __table_args__ = (Index("ix_transition_target", "kind", "label", "at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    #: ``model`` or ``agent``. Both families promote, and both are logged here
+    #: rather than in two tables, because "what changed last week" is one
+    #: question and answering it should not need a union.
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    label: Mapped[str] = mapped_column(String(255), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    from_stage: Mapped[str] = mapped_column(String(32))
+    to_stage: Mapped[str] = mapped_column(String(32), index=True)
+    #: What the comparison said, when one was run: the counts and the verdict.
+    #: Null means nobody checked, which is itself worth being able to see.
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    #: Who moved it, when that can be known. An audit trail without an actor
+    #: answers half the question, so this follows git's precedent and records
+    #: the local user, overridable through ``MLANGO_ACTOR`` and empty when
+    #: neither is available.
+    actor: Mapped[str] = mapped_column(String(255), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+    @property
+    def ref(self) -> str:
+        return f"{self.label}@v{self.version}"
+
+    def __repr__(self) -> str:
+        return f"<StageTransition {self.ref} {self.from_stage}→{self.to_stage}>"
+
+
 class Prediction(Base):
     """One request a deployed version answered.
 
@@ -496,6 +542,7 @@ ALL_TABLES = (
     Span,
     EvalResult,
     Prediction,
+    StageTransition,
 )
 
 __all__ = [
@@ -516,5 +563,6 @@ __all__ = [
     "Span",
     "EvalResult",
     "Prediction",
+    "StageTransition",
     "ALL_TABLES",
 ]

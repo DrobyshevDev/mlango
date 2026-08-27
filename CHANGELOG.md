@@ -6,6 +6,86 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `RecordingProvider` and `ReplayProvider` record an agent's model calls to a
+  file and play them back. An eval suite with an agent in it otherwise talks to
+  a model: slow, paid for by the call, and different every time. A cassette is a
+  `Provider`, so the agent, loop, tools and tracing are the real ones and only
+  the model is absent.
+- `Agent.run()` and `Agent.stream()` take `provider=` to override the declared
+  one for that call. That is the seam recording hangs off, and being an argument
+  rather than a setting is what stops a recording leaking into the next test.
+- **A promotion log.** `stage` on a version row is a mutable column, so
+  promoting v3 overwrote what v2 was: the registry could say what is live and
+  nothing about how it got there, which is the question a post-mortem opens
+  with. `mlango_stage_transitions` is the twelfth metastore table, added on
+  connect like any other additive change, and holds one row per move —
+  demotions included, so the log reads as a history rather than a list of
+  winners. `--check` writes its verdict into the row it justified, because a
+  promotion made on a comparison and one made on a hunch are indistinguishable a
+  month later unless the comparison was written down; a move nobody checked says
+  so rather than showing a blank. The actor is the local user, git-style, and
+  `MLANGO_ACTOR` overrides it — which is what a CI job wants, since the runner's
+  account is nobody. `manage.py promote --history` reads it back, with no label
+  for the whole registry, and `mlango.metastore.history.stage_at` replays it to
+  answer what held a stage at a given moment. Recorded in the same transaction
+  as the stage change, or the history would be fiction.
+- `Model.promote()` and `Agent.promote()` take `evidence=` and `notes=`.
+- **`manage.py diff --format markdown`.** The report is a decision one person
+  made as long as it only exists in a terminal, and promoting a model is rarely
+  one person's decision. This renders the same comparison for a pull request:
+  the broken count in the heading, because a comment is first read as a
+  notification, and the disagreeing rows folded away, because one two hundred
+  rows tall is one nobody scrolls. A pure function of the report dictionary, so
+  it covers all four things `diff` compares — registered versions, evaluation
+  runs, files mlango never trained, and shadow traffic — without knowing any of
+  them exist. `--output PATH` writes it without touching the exit code, so a CI
+  job can keep the report and still fail on it, and every report opens with a
+  stable marker so a job can edit its own last comment instead of leaving a
+  thread. `docs/ci.md` has the workflow.
+- **`manage.py promote`.** The workflow this project leads with ended one step
+  short: the framework could say what a new version broke and could promote one
+  from Python or the admin, but not from a terminal. `--check` closes the loop
+  the other way — it compares the candidate with whoever holds the stage and
+  refuses the promotion if rows were lost, with `significant` allowing a loss the
+  evidence cannot distinguish from a coin. One verb for models and agents.
+- `manage.py sweep --workers N` runs trials concurrently. Threads rather than
+  processes: settings and the registry are already shared, the metastore is
+  built for overlapping access, and sklearn and torch release the GIL for the
+  numeric work. The seed is process-global, so concurrent trials no longer each
+  start from it — said plainly in the help and the docs, because a sweep is a
+  search rather than a number to reproduce.
+- `examples/promotion/` reproduces the comparison the README opens with, in one
+  command and with no project to set up.
+
+### Fixed
+
+- **Two trainings of the same model racing for a version number lost one of
+  them.** `SELECT max(version)` then `INSERT max+1` is a read-then-write with
+  nothing holding the gap, so the loser hit the unique constraint and its run
+  finished having registered nothing. Retried rather than locked, because the
+  racers need not be threads: two `manage.py train` invocations collide the same
+  way and an in-process lock cannot see them. Found by the first parallel sweep.
+- **The version-number retry gave up too early under real contention.** The
+  budget was three collisions, on the reasoning that each retry re-reads the
+  maximum so three could only be exhausted by something extreme. That was wrong:
+  the attempts a loser needs is the number of racers, because they all read the
+  same maximum and lose one at a time — so four workers already exceeded it, and
+  `sweep --workers` lets a user pick the number. Bounded by time now, which is
+  the thing actually worth bounding. Found by CI on the test written for the
+  original fix.
+- **Two threads reaching an untouched metastore both created it**, and the loser
+  got `table already exists`. A threaded server answering its first two requests
+  at once is the ordinary way to meet this; schema creation now holds a lock.
+
+### Changed
+
+- The README leads with what mlango does that nothing else does — telling you
+  what a new model version broke before you promote it — rather than with the
+  category it belongs to. The Django framing stays, as the *how*.
+
+
 ## 0.3.0 — 2026-08-22
 
 0.2.0 answered questions about a single version: why did it say that, has the

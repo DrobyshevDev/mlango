@@ -1,6 +1,6 @@
 # mlango
 
-**A batteries-included framework for machine learning, analytics and LLM agents, built on Django's philosophy.**
+**Know what your new model version broke — before you promote it.**
 
 *Read this in [Русский](https://github.com/DrobyshevDev/mlango/blob/master/README.ru.md).*
 
@@ -13,18 +13,59 @@
 pip install "mlango[sklearn]"
 ```
 
-ML projects tend to become a pile of scripts: one to load data, one to train, a
-notebook that produced the number in the slide deck, a `checkpoints/` directory
-nobody can map back to a commit.
+Your new model is two points more accurate. Ship it?
 
-Web development had the same problem, and Django's answer was not a better
-library but a **framework**: a project layout, a settings module, declarative
-classes, migrations, an auto-generated admin, and a `manage.py` that ties it
-together.
+Aggregate metrics cannot tell you that it also broke forty rows that used to
+work — and those are usually the ones somebody complained about last month.
+mlango can:
+
+```bash
+$ python manage.py diff reviews.Sentiment 1 2
+
+reviews.Sentiment v1 → v2 on 500 rows of reviews.Reviews
+
+  agreement      92.0%
+  changed        40 row(s)
+    pos → neg                22
+    neg → pos                18
+
+Against the labels
+  v1     accuracy     0.7700
+  v2     accuracy     0.8060   +0.0360
+  fixed          29 row(s) wrong in v1
+  broke          11 row(s) right in v1
+  verdict        a real improvement: 29 fixed against 11 broken (p=0.006)
+```
+
+Accuracy went up three and a half points. Eleven rows that used to work now do
+not — and `broke` is the only place that number appears. Reproduce it with
+[`examples/promotion/`](https://github.com/DrobyshevDev/mlango/tree/master/examples/promotion).
+
+`--fail-on-regression` turns that into an exit code you can put in front of a
+promotion, `manage.py promote --check` puts the same rule on the promotion
+itself, and `--format markdown` posts the comparison into the pull request where
+the rest of the team is. The same command compares **two runs of an agent's eval suite**
+(prompts have no version numbers, so it diffs the runs and tells you what you
+changed), **two model files mlango never trained**, and **what a candidate would
+have answered on live traffic** if you run it as a shadow.
+
+None of it needed extra infrastructure. It reads what the framework already
+recorded.
+
+## Where that comes from
+
+ML projects become a pile of scripts: one to load data, one to train, a notebook
+that produced the number in the slide deck, a `checkpoints/` directory nobody can
+map back to a commit. Nothing knows what anything else did, so nothing can
+compare two of them.
+
+Web development had this problem, and Django's answer was not a better library
+but a **framework**: a project layout, a settings module, declarative classes,
+migrations, an auto-generated admin, and a `manage.py` that ties it together.
 
 mlango applies that answer to ML. You declare datasets, models, agents and
-evaluations; the framework runs them, versions them, records them and shows them
-to you.
+evaluations; the framework runs them, versions them, records them, and — because
+it recorded them — can tell you what changed.
 
 ```python
 # reviews/datasets.py
@@ -79,6 +120,18 @@ That one command resolves your class, opens a tracked run, seeds every RNG,
 splits the data deterministically, calls your `build()`, drives the training
 loop, records metrics, captures the git commit, saves the artifact and registers
 a promotable model version. You wrote `build()` and four field declarations.
+
+## What you can ask afterwards
+
+| Question | Command |
+|---|---|
+| What did the new version break? | `manage.py diff reviews.Sentiment 3 4` |
+| Is that difference real, or a coin? | the `verdict` line — McNemar, computed exactly |
+| Why did it change? | the config delta, printed beside the result |
+| What is it paying attention to? | `manage.py explain reviews.Sentiment` |
+| Has the world moved since training? | `manage.py drift reviews.Sentiment` |
+| What would the candidate say to real traffic? | `SHADOW`, then `diff --from-log` |
+| Did my prompt change break the agent? | `manage.py diff --eval support.Quality` |
 
 ---
 

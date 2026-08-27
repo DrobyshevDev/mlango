@@ -82,6 +82,7 @@ plugins:
             Monitoring: Мониторинг
             Settings: Настройки
             Command line: Командная строка
+            Continuous integration: Непрерывная интеграция
             Migrations: Миграции
             Community: Сообщество
             Extending: Расширение
@@ -132,6 +133,7 @@ nav:
       - Monitoring: monitoring.md
       - Migrations: migrations.md
       - Command line: cli.md
+      - Continuous integration: ci.md
       - Settings: settings.md
       - Extending: extending.md
   - Community:

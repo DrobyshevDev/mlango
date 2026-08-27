@@ -13,7 +13,7 @@ graph TD
     end
 
     subgraph persistence[" "]
-        META["<b>metastore</b><br/><small>11 tables · sessions</small>"]
+        META["<b>metastore</b><br/><small>12 tables · sessions</small>"]
         MIG["<b>migrations</b><br/><small>autodetector · writer · executor</small>"]
         STORE["<b>storage</b><br/><small>artifacts</small>"]
     end

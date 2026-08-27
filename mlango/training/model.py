@@ -37,6 +37,23 @@ from mlango.training.trainer import Trainer, get_trainer
 
 logger = logging.getLogger("mlango.model")
 
+#: How long to keep re-reading the highest version number when other trainings
+#: keep taking it first.
+#:
+#: A bound on time rather than on attempts, because the attempts a loser needs
+#: is the number of racers: four workers starting together all read the same
+#: maximum, one wins, and the last one left has to lose three times before its
+#: turn. This code cannot know that number — `sweep --workers` lets a user pick
+#: it — so counting collisions bounds the wrong thing. Fifteen seconds of
+#: nothing but losing is a real problem worth surfacing; three collisions is
+#: four workers on a Tuesday.
+VERSION_RETRY_SECONDS = 15.0
+
+#: Backoff is capped so a long queue of racers does not become a long queue of
+#: sleeps: the two constants together are what decides how much contention
+#: survives, and at a tenth of a second the budget covers about a hundred.
+VERSION_RETRY_MAX_SLEEP = 0.1
+
 #: The request a prediction belongs to, set by the serving layer so a shadow
 #: row and the row it shadowed can be paired later. A ContextVar rather than an
 #: argument because predict() is called by user code that has no idea a shadow
@@ -311,6 +328,7 @@ class Model(Declarative):
         baseline: dict[str, Any] | None = None,
     ) -> None:
         from sqlalchemy import func, select
+        from sqlalchemy.exc import IntegrityError
 
         from mlango.metastore.models import ModelVersion
         from mlango.metastore.session import session_scope
@@ -320,25 +338,49 @@ class Model(Declarative):
         path = trainer.save(self, self._fitted, f"models/{opts.label.replace('.', '/')}/{run.uuid}")
         run.log_artifact("model", path, kind="model")
 
-        with session_scope() as session:
-            highest = session.execute(
-                select(func.max(ModelVersion.version)).where(ModelVersion.label == opts.label)
-            ).scalar()
-            version = ModelVersion(
-                label=opts.label,
-                version=(highest or 0) + 1,
-                fingerprint=opts.fingerprint(),
-                run_id=run.run_id,
-                path=path,
-                params=_jsonable(params),
-                metrics=_jsonable(summary),
-                importances=_importances(self, trainer),
-                baseline=baseline,
-                stage=Stage.NONE,
-            )
-            session.add(version)
-            session.flush()
-            self._version = version
+        # Reading the highest version and inserting the next one is a
+        # read-then-write, and nothing holds the gap. Two trainings of the same
+        # model racing — a parallel sweep, two workers, two terminals — both
+        # read the same maximum and the unique constraint rejects the loser,
+        # whose run then finishes having registered nothing.
+        #
+        # Retried rather than locked: the racers are not necessarily threads,
+        # and an in-process lock cannot see another process.
+        deadline = time.monotonic() + VERSION_RETRY_SECONDS
+        attempt = 0
+        while True:
+            try:
+                with session_scope() as session:
+                    highest = session.execute(
+                        select(func.max(ModelVersion.version)).where(
+                            ModelVersion.label == opts.label
+                        )
+                    ).scalar()
+                    version = ModelVersion(
+                        label=opts.label,
+                        version=(highest or 0) + 1,
+                        fingerprint=opts.fingerprint(),
+                        run_id=run.run_id,
+                        path=path,
+                        params=_jsonable(params),
+                        metrics=_jsonable(summary),
+                        importances=_importances(self, trainer),
+                        baseline=baseline,
+                        stage=Stage.NONE,
+                    )
+                    session.add(version)
+                    session.flush()
+                    self._version = version
+                break
+            except IntegrityError:
+                if time.monotonic() >= deadline:
+                    raise
+                # Someone took the number between the read and the write. Wait
+                # a moment so the two do not collide again in lockstep, then
+                # re-read the maximum.
+                attempt += 1
+                time.sleep(min(random.uniform(0.01, 0.05) * attempt, VERSION_RETRY_MAX_SLEEP))
+                logger.debug("Version number for %s was taken; retrying", opts.label)
 
         model_registered.send(sender=type(self), model=self, version=self._version)
         logger.info("Registered %s", self._version.ref)
@@ -447,10 +489,24 @@ class Model(Declarative):
         return cls.load(stage=Stage.PRODUCTION)
 
     @classmethod
-    def promote(cls, version: int, stage: str = Stage.PRODUCTION) -> Any:
-        """Move a version to a stage, demoting whoever held it."""
+    def promote(
+        cls,
+        version: int,
+        stage: str = Stage.PRODUCTION,
+        *,
+        evidence: dict[str, Any] | None = None,
+        notes: str = "",
+    ) -> Any:
+        """Move a version to a stage, demoting whoever held it.
+
+        ``evidence`` is what the move was decided on — the counts and the
+        verdict from a comparison — recorded beside it, because a promotion
+        made on a comparison and one made on a hunch are indistinguishable a
+        month later unless the comparison was written down.
+        """
         from sqlalchemy import select
 
+        from mlango.metastore.history import record_transition
         from mlango.metastore.models import ModelVersion
         from mlango.metastore.session import session_scope
 
@@ -466,11 +522,34 @@ class Model(Declarative):
             target = next((r for r in rows if r.version == version), None)
             if target is None:
                 raise LookupError(f"{cls._meta.label} has no version {version}.")
+
+            moves: list[tuple[ModelVersion, str, str]] = []
             if stage in (Stage.PRODUCTION, Stage.STAGING):
                 for row in rows:
                     if row.stage == stage and row is not target:
+                        moves.append((row, row.stage, Stage.ARCHIVED))
                         row.stage = Stage.ARCHIVED
+            if target.stage != stage:
+                moves.append((target, target.stage, stage))
             target.stage = stage
+
+            # In the same transaction as the change itself, or the history is
+            # fiction. A move to the stage a version already holds records
+            # nothing: it did not happen.
+            for row, was, now in moves:
+                record_transition(
+                    session,
+                    kind="model",
+                    label=cls._meta.label,
+                    version=row.version,
+                    from_stage=was,
+                    to_stage=now,
+                    # A demotion is a consequence, not a decision: the evidence
+                    # belongs on the promotion that caused it, and what the
+                    # demoted row wants recorded is what displaced it.
+                    evidence=(evidence if row is target else {"superseded_by": target.version}),
+                    notes=notes if row is target else "",
+                )
             session.flush()
             return target
 

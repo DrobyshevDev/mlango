@@ -166,11 +166,18 @@ class Agent(Declarative):
         history: list[dict[str, Any]] | None = None,
         max_steps: int | None = None,
         run_id: int | None = None,
+        provider: Provider | None = None,
         **provider_kwargs: Any,
     ) -> AgentRun:
-        """Run the tool-use loop until the model stops asking for tools."""
+        """Run the tool-use loop until the model stops asking for tools.
+
+        ``provider`` overrides the declared one for this call. That is the seam
+        recording and replay hang off: a cassette is a Provider, so a test can
+        run the real agent against a recorded conversation without the agent
+        knowing, and without a setting that would leak into the next test.
+        """
         opts = type(self)._meta
-        provider = self.get_provider()
+        provider = provider or self.get_provider()
         toolbox = self.get_tools()
         store = memory if memory is not None else self.get_memory()
         limit = max_steps or self.get_max_steps()
@@ -225,6 +232,7 @@ class Agent(Declarative):
         history: list[dict[str, Any]] | None = None,
         max_steps: int | None = None,
         run_id: int | None = None,
+        provider: Provider | None = None,
         **provider_kwargs: Any,
     ) -> Iterator[AgentEvent]:
         """Run the loop, yielding events as they happen.
@@ -238,7 +246,7 @@ class Agent(Declarative):
                     print(event.text, end="", flush=True)
         """
         opts = type(self)._meta
-        provider = self.get_provider()
+        provider = provider or self.get_provider()
         toolbox = self.get_tools()
         store = memory if memory is not None else self.get_memory()
         limit = max_steps or self.get_max_steps()
@@ -544,11 +552,22 @@ class Agent(Declarative):
         return next((v for v in cls.versions() if v.fingerprint == fingerprint), None)
 
     @classmethod
-    def promote(cls, version: int, stage: str = "production") -> Any:
-        """Move a version to a stage, demoting whatever held it."""
+    def promote(
+        cls,
+        version: int,
+        stage: str = "production",
+        *,
+        evidence: dict[str, Any] | None = None,
+        notes: str = "",
+    ) -> Any:
+        """Move a version to a stage, demoting whatever held it.
+
+        Logged the same way a model's promotion is — same table, same reasons.
+        """
         from sqlalchemy import select
 
         from mlango.core.exceptions import ImproperlyConfigured
+        from mlango.metastore.history import record_transition
         from mlango.metastore.models import AgentVersion, Stage
         from mlango.metastore.session import session_scope
 
@@ -565,12 +584,28 @@ class Agent(Declarative):
             if target is None:
                 raise LookupError(f"{cls._meta.label} has no version {version}.")
 
+            moves: list[tuple[AgentVersion, str, str]] = []
             if stage in (Stage.PRODUCTION, Stage.STAGING):
                 # One version per stage, or "production" stops meaning anything.
                 for row in rows:
                     if row.stage == stage and row is not target:
+                        moves.append((row, row.stage, Stage.ARCHIVED))
                         row.stage = Stage.ARCHIVED
+            if target.stage != stage:
+                moves.append((target, target.stage, stage))
             target.stage = stage
+
+            for row, was, now in moves:
+                record_transition(
+                    session,
+                    kind="agent",
+                    label=cls._meta.label,
+                    version=row.version,
+                    from_stage=was,
+                    to_stage=now,
+                    evidence=(evidence if row is target else {"superseded_by": target.version}),
+                    notes=notes if row is target else "",
+                )
             session.flush()
             return target
 

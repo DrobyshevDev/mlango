@@ -119,6 +119,21 @@ python manage.py sweep reviews.Sentiment -p C=0.25,1,4 \
 | `--materialize` | Freeze the training view into a dataset version first |
 | `--no-register` | Train without adding to the registry |
 
+Trials run one after another by default. `--workers` runs them together:
+
+```bash
+python manage.py sweep reviews.Sentiment -p C=0.25,1,4 --workers 4
+```
+
+Threads, not processes — settings and the registry are already shared, the
+metastore is SQLite in WAL mode built for overlapping readers and writers, and
+the numeric work in sklearn and torch releases the GIL.
+
+One honest cost: **the RNG seed is process-global**, so concurrent trials no
+longer each begin from the same state. A sweep is a search rather than a number
+to reproduce, which is why the option exists — re-run the winning point on its
+own if you need its exact score back.
+
 ### Prediction
 
 Scoring without starting a server. The model comes from the registry, so this
@@ -273,6 +288,109 @@ python manage.py diff reviews.Sentiment --fail-on-regression
 # A real dataset before a promotion: noise may pass, a real loss may not.
 python manage.py diff reviews.Sentiment --fail-on-regression significant
 ```
+
+Three renderings, one report. `--format markdown` produces something meant to be
+posted in a pull request rather than read in a terminal, and `--output` writes it
+to a file without touching the exit code — so a CI job can keep the report and
+still go red:
+
+```bash
+python manage.py diff reviews.Sentiment     --format markdown --show-changes 20     --output diff.md --fail-on-regression significant
+```
+
+`--json` is the older spelling of `--format json` and still means what it meant.
+The workflow around this is in [Continuous integration](ci.md).
+
+### Promoting a version
+
+The other half of the diff. `promote` moves a model or agent version to a
+stage, and `--check` compares it with whoever holds that stage first — refusing
+the promotion if the candidate lost rows.
+
+```bash
+python manage.py promote reviews.Sentiment 4                     # to production
+python manage.py promote reviews.Sentiment                       # the newest version
+python manage.py promote reviews.Sentiment 4 --stage staging
+python manage.py promote reviews.Sentiment 4 --check             # lose nothing
+python manage.py promote reviews.Sentiment 4 --check significant # lose nothing that matters
+```
+
+```
+$ python manage.py promote reviews.Sentiment 2 --check
+
+v1 → v2 on 500 rows of reviews.Reviews
+  accuracy       0.7700 → 0.8060   +0.0360
+  fixed          29 row(s)
+  broke          11 row(s)
+
+error: Refusing to promote: v2 is wrong on 11 row(s) that v1 got right.
+Inspect them with: manage.py diff reviews.Sentiment 1 2 --show-changes 11
+```
+
+Note that v2 is **more accurate** and the strict check still refuses it. That
+rule is for a curated suite where nothing may be lost. On a real dataset use
+`--check significant`, which allows a loss the evidence cannot distinguish from
+a coin and refuses one it can:
+
+```
+  verdict        a real improvement: 29 fixed against 11 broken (p=0.006)
+reviews.Sentiment@v2 is now at stage 'production'.
+```
+
+| Flag | Effect |
+|---|---|
+| `--stage NAME` | Which stage. Default `production` |
+| `--check [any\|significant]` | Compare with the incumbent first, and refuse a regression |
+| `--dataset LABEL` | Score `--check` against this dataset |
+| `-n N` | Cap the rows `--check` scores |
+| `--notes TEXT` | Why, recorded with the move |
+| `--history` | List what has been promoted instead of promoting |
+
+One verb covers models and agents — an agent version is the same idea, so
+`promote support.Support 3` works too. `--check` needs a model, because it
+compares predictions; for an agent, compare two runs of its evaluation suite
+with `diff --eval`.
+
+Every move is recorded. The `stage` column is mutable — promoting v3 overwrites
+what v2 was — so on its own a registry can say what is live and nothing about
+how it got there:
+
+```bash
+python manage.py promote reviews.Sentiment --history   # one model
+python manage.py promote --history                     # everything
+```
+
+```
+reviews.Sentiment — 3 move(s), newest first
+
+when              version  move                   who      on the strength of
+----------------  -------  ---------------------  -------  -------------------------------------
+2026-08-27 11:26  v2       none → production      denis    29 fixed / 11 broke, accuracy +0.0360
+2026-08-27 11:26  v1       production → archived  denis    superseded by v2
+2026-08-20 09:03  v1       none → production      denis    first one live
+```
+
+Three things are deliberate there. The demotion is logged too, so the history
+reads as a history rather than as a list of winners. `--check` writes its
+verdict into the row, because a promotion made on a comparison and one made on a
+hunch look identical a month later unless the comparison was written down — and
+a move nobody checked says **not checked** rather than showing a blank, which is
+the most useful thing a promotion log can tell you. And the actor is the local
+user, `git`-style; set `MLANGO_ACTOR` to override it, which is what a CI job
+should do, since the runner's account is nobody.
+
+From Python the same log is `mlango.metastore.history`:
+
+```python
+from mlango.metastore.history import history, stage_at
+
+history("reviews.Sentiment")                       # moves, newest first
+stage_at("reviews.Sentiment", when=last_tuesday)   # what was live then
+```
+
+`stage_at` replays the log rather than reading the version rows, because the
+version rows only know about now — which is exactly the wrong thing to ask when
+something broke last Tuesday.
 
 ### Models mlango did not train
 

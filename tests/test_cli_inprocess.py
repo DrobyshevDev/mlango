@@ -889,6 +889,60 @@ class TestDiff:
         assert report["rows"] == 80
         assert set(report) >= {"agreement", "changed", "transitions", "fixed", "broke", "metrics"}
 
+    def test_markdown_is_the_same_report_for_a_pull_request(self, two_versions, capsys):
+        good, weak = two_versions
+        argv = ("diff", "demo.Sentiment", str(good), str(weak), "-n", "80")
+        assert run(*argv, "--format", "markdown") == 0
+        out = capsys.readouterr().out
+        assert out.startswith("<!-- mlango:diff:model:demo.Sentiment -->")
+        assert "###" in out and f"v{good} → v{weak}" in out
+        assert "| broke |" in out
+
+    def test_the_old_json_flag_still_means_what_it_meant(self, two_versions, capsys):
+        """It was released API before --format existed."""
+        good, weak = two_versions
+        assert run("diff", "demo.Sentiment", str(good), str(weak), "-n", "80", "--json") == 0
+        assert json.loads(capsys.readouterr().out)["rows"] == 80
+
+    def test_output_writes_the_report_and_still_fails_the_build(self, two_versions, tmp_path):
+        """The whole point in CI: keep the report, and go red anyway."""
+        good, weak = two_versions
+        destination = tmp_path / "diff.md"
+        code = run(
+            "diff",
+            "demo.Sentiment",
+            str(good),
+            str(weak),
+            "-n",
+            "120",
+            "--format",
+            "markdown",
+            "--output",
+            str(destination),
+            "--fail-on-regression",
+        )
+        assert code == 1
+        assert destination.read_text(encoding="utf-8").startswith("<!-- mlango:diff:")
+
+    def test_a_report_written_to_a_file_carries_no_escape_codes(self, two_versions, tmp_path):
+        """Even the terminal rendering, which is the one with colours in it."""
+        good, weak = two_versions
+        destination = tmp_path / "diff.txt"
+        assert (
+            run(
+                "diff",
+                "demo.Sentiment",
+                str(good),
+                str(weak),
+                "-n",
+                "80",
+                "--output",
+                str(destination),
+            )
+            == 0
+        )
+        assert "\033[" not in destination.read_text(encoding="utf-8")
+
     def test_show_changes_prints_the_rows(self, two_versions, capsys):
         good, weak = two_versions
         assert (

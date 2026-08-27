@@ -387,3 +387,100 @@ def _fake_result(mode: str, scored: list[tuple[int, float]]):
         for index, score in scored
     ]
     return result
+
+
+class TestParallelTrials:
+    """``workers`` above 1 runs trials concurrently. Same results, different order."""
+
+    def test_every_trial_still_runs(self, sweepable):
+        from mlango.training.sweep import run_sweep
+
+        _rows, sweepable = sweepable
+
+        result = run_sweep(sweepable, {"C": [0.1, 0.5, 1.0, 2.0]}, workers=3)
+
+        assert len(result.trials) == 4
+        assert all(trial.status == "finished" for trial in result.trials)
+
+    def test_trials_are_reported_in_order_however_they_finished(self, sweepable):
+        """They complete out of order; a report whose rows jump around is worse."""
+        from mlango.training.sweep import run_sweep
+
+        _rows, sweepable = sweepable
+
+        result = run_sweep(sweepable, {"C": [0.1, 0.5, 1.0, 2.0]}, workers=3)
+
+        assert [trial.index for trial in result.trials] == [1, 2, 3, 4]
+
+    def test_the_same_space_finds_the_same_winner(self, sweepable):
+        from mlango.training.sweep import run_sweep
+
+        _rows, sweepable = sweepable
+
+        space = {"C": [0.01, 1.0]}
+        serial = run_sweep(sweepable, space, workers=1)
+        parallel = run_sweep(sweepable, space, workers=3)
+
+        assert serial.best is not None and parallel.best is not None
+        assert serial.best.params == parallel.best.params
+
+    def test_each_trial_registers_its_own_version(self, sweepable):
+        """Concurrent writers to the version table must not collide or overwrite."""
+        from mlango.training.sweep import run_sweep
+
+        _rows, sweepable = sweepable
+
+        run_sweep(sweepable, {"C": [0.1, 0.5, 1.0, 2.0]}, workers=4)
+
+        versions = sweepable.versions()
+        assert len({v.version for v in versions}) == len(versions) == 4
+
+    def test_a_failing_trial_does_not_take_the_pool_down(self, sweepable):
+        """One raising thread would otherwise lose the trials already collected."""
+        from mlango.training.sweep import run_sweep
+
+        _rows, sweepable = sweepable
+
+        original = sweepable.train
+        calls = []
+
+        def train(self, **kwargs):
+            calls.append(self.C)
+            if self.C == 0.5:
+                raise RuntimeError("this corner of the space is bad")
+            return original(self, **kwargs)
+
+        sweepable.train = train
+        try:
+            result = run_sweep(sweepable, {"C": [0.1, 0.5, 1.0]}, workers=3)
+        finally:
+            sweepable.train = original
+
+        statuses = {trial.index: trial.status for trial in result.trials}
+        assert sum(1 for s in statuses.values() if s == "failed") == 1
+        assert sum(1 for s in statuses.values() if s == "finished") == 2
+        assert result.best is not None, "the good trials still produced a winner"
+
+    def test_the_callback_fires_once_per_trial(self, sweepable):
+        from mlango.training.sweep import run_sweep
+
+        _rows, sweepable = sweepable
+
+        seen = []
+        run_sweep(
+            sweepable, {"C": [0.1, 0.5, 1.0]}, workers=3, on_trial=lambda t, r: seen.append(t.index)
+        )
+
+        assert sorted(seen) == [1, 2, 3]
+
+    def test_the_parent_run_records_a_point_per_trial(self, sweepable):
+        from mlango.training.run import get_run, metric_history
+        from mlango.training.sweep import run_sweep
+
+        _rows, sweepable = sweepable
+
+        result = run_sweep(sweepable, {"C": [0.1, 0.5, 1.0]}, workers=3)
+
+        parent = get_run(result.run_uuid)
+        points = metric_history(parent.id, result.metric)
+        assert [step for step, _ in points] == [1, 2, 3], "in trial order, not completion order"
