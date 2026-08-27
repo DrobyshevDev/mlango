@@ -13,7 +13,7 @@ graph TD
     end
 
     subgraph persistence[" "]
-        META["<b>metastore</b><br/><small>11 таблиц · сессии</small>"]
+        META["<b>metastore</b><br/><small>12 таблиц · сессии</small>"]
         MIG["<b>migrations</b><br/><small>автодетектор · writer · executor</small>"]
         STORE["<b>storage</b><br/><small>артефакты</small>"]
     end

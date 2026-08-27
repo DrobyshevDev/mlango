@@ -343,11 +343,54 @@ reviews.Sentiment@v2 is now at stage 'production'.
 | `--check [any\|significant]` | Compare with the incumbent first, and refuse a regression |
 | `--dataset LABEL` | Score `--check` against this dataset |
 | `-n N` | Cap the rows `--check` scores |
+| `--notes TEXT` | Why, recorded with the move |
+| `--history` | List what has been promoted instead of promoting |
 
 One verb covers models and agents — an agent version is the same idea, so
 `promote support.Support 3` works too. `--check` needs a model, because it
 compares predictions; for an agent, compare two runs of its evaluation suite
 with `diff --eval`.
+
+Every move is recorded. The `stage` column is mutable — promoting v3 overwrites
+what v2 was — so on its own a registry can say what is live and nothing about
+how it got there:
+
+```bash
+python manage.py promote reviews.Sentiment --history   # one model
+python manage.py promote --history                     # everything
+```
+
+```
+reviews.Sentiment — 3 move(s), newest first
+
+when              version  move                   who      on the strength of
+----------------  -------  ---------------------  -------  -------------------------------------
+2026-08-27 11:26  v2       none → production      denis    29 fixed / 11 broke, accuracy +0.0360
+2026-08-27 11:26  v1       production → archived  denis    superseded by v2
+2026-08-20 09:03  v1       none → production      denis    first one live
+```
+
+Three things are deliberate there. The demotion is logged too, so the history
+reads as a history rather than as a list of winners. `--check` writes its
+verdict into the row, because a promotion made on a comparison and one made on a
+hunch look identical a month later unless the comparison was written down — and
+a move nobody checked says **not checked** rather than showing a blank, which is
+the most useful thing a promotion log can tell you. And the actor is the local
+user, `git`-style; set `MLANGO_ACTOR` to override it, which is what a CI job
+should do, since the runner's account is nobody.
+
+From Python the same log is `mlango.metastore.history`:
+
+```python
+from mlango.metastore.history import history, stage_at
+
+history("reviews.Sentiment")                       # moves, newest first
+stage_at("reviews.Sentiment", when=last_tuesday)   # what was live then
+```
+
+`stage_at` replays the log rather than reading the version rows, because the
+version rows only know about now — which is exactly the wrong thing to ask when
+something broke last Tuesday.
 
 ### Models mlango did not train
 

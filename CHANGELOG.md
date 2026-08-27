@@ -16,6 +16,22 @@ All notable changes to this project are documented here. The format follows
 - `Agent.run()` and `Agent.stream()` take `provider=` to override the declared
   one for that call. That is the seam recording hangs off, and being an argument
   rather than a setting is what stops a recording leaking into the next test.
+- **A promotion log.** `stage` on a version row is a mutable column, so
+  promoting v3 overwrote what v2 was: the registry could say what is live and
+  nothing about how it got there, which is the question a post-mortem opens
+  with. `mlango_stage_transitions` is the twelfth metastore table, added on
+  connect like any other additive change, and holds one row per move —
+  demotions included, so the log reads as a history rather than a list of
+  winners. `--check` writes its verdict into the row it justified, because a
+  promotion made on a comparison and one made on a hunch are indistinguishable a
+  month later unless the comparison was written down; a move nobody checked says
+  so rather than showing a blank. The actor is the local user, git-style, and
+  `MLANGO_ACTOR` overrides it — which is what a CI job wants, since the runner's
+  account is nobody. `manage.py promote --history` reads it back, with no label
+  for the whole registry, and `mlango.metastore.history.stage_at` replays it to
+  answer what held a stage at a given moment. Recorded in the same transaction
+  as the stage change, or the history would be fiction.
+- `Model.promote()` and `Agent.promote()` take `evidence=` and `notes=`.
 - **`manage.py diff --format markdown`.** The report is a decision one person
   made as long as it only exists in a terminal, and promoting a model is rarely
   one person's decision. This renders the same comparison for a pull request:

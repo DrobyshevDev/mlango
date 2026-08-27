@@ -21,7 +21,11 @@ class Command(BaseCommand):
     help = "Move a model or agent version to a stage, and optionally check it first."
 
     def add_arguments(self, parser) -> None:
-        parser.add_argument("label", help="Model or agent label, e.g. reviews.Sentiment.")
+        parser.add_argument(
+            "label",
+            nargs="?",
+            help="Model or agent label, e.g. reviews.Sentiment.",
+        )
         parser.add_argument(
             "version",
             nargs="?",
@@ -47,6 +51,13 @@ class Command(BaseCommand):
         )
         parser.add_argument("--dataset", help="Score --check against this dataset.")
         parser.add_argument("-n", "--limit", type=int, help="Cap the rows --check scores.")
+        parser.add_argument(
+            "--history",
+            action="store_true",
+            help="List what has been promoted instead of promoting anything. "
+            "With no label, the whole registry's history.",
+        )
+        parser.add_argument("--notes", default="", help="Why, recorded with the move.")
 
     def handle(self, **options: Any) -> None:
         from mlango.core.exceptions import MlangoError
@@ -54,6 +65,15 @@ class Command(BaseCommand):
         from mlango.metastore.models import Stage
 
         label = options["label"]
+        if options["history"]:
+            self._history(label, options)
+            return
+        if not label:
+            raise CommandError(
+                "Name a model or agent to promote, or pass --history to see what "
+                "has already been promoted."
+            )
+
         stage = options["stage"]
         if stage not in Stage.ALL:
             raise CommandError(f"{stage!r} is not a stage. One of: {', '.join(Stage.ALL)}.")
@@ -61,11 +81,12 @@ class Command(BaseCommand):
         target, kind = self._resolve(apps, label)
         version = options["version"] or self._newest(target, label)
 
+        evidence = None
         if options["check"]:
-            self._check(target, kind, version, stage, options)
+            evidence = self._check(target, kind, version, stage, options)
 
         try:
-            promoted = target.promote(version, stage)
+            promoted = target.promote(version, stage, evidence=evidence, notes=options["notes"])
         except LookupError as exc:
             raise CommandError(str(exc)) from exc
         except (MlangoError, ValueError) as exc:
@@ -120,12 +141,60 @@ class Command(BaseCommand):
             )
         return int(versions[0].version)
 
+    # -- history -------------------------------------------------------------
+
+    def _history(self, label: str | None, options: dict[str, Any]) -> None:
+        """What has been promoted, newest first.
+
+        The stage column on a version row only knows about now, so without this
+        a registry that has been in use for a year can say what is live and
+        nothing about how it got there.
+        """
+        from mlango.metastore.history import history
+
+        moves = history(label, limit=options.get("limit") or 50)
+        if not moves:
+            where = f" for {label}" if label else ""
+            self.write(f"Nothing has been promoted{where} yet.")
+            return
+
+        self.write(
+            self.style.bold(
+                f"{label or 'Every model and agent'} — {len(moves)} move(s), newest first"
+            )
+        )
+        self.write("")
+
+        columns = ["when", "what", "version", "move", "who", "on the strength of"]
+        if label:
+            # Naming it once in the heading is enough.
+            columns.remove("what")
+
+        rows = []
+        for move in moves:
+            row = [
+                move.at.strftime("%Y-%m-%d %H:%M"),
+                move.label,
+                f"v{move.version}",
+                f"{move.from_stage} → {move.to_stage}",
+                move.actor or "—",
+                _evidence_line(move),
+            ]
+            if label:
+                del row[1]
+            rows.append(row)
+        self.table(columns, rows)
+
     # -- the check -----------------------------------------------------------
 
     def _check(
         self, target: Any, kind: str, version: int, stage: str, options: dict[str, Any]
-    ) -> None:
-        """Compare the candidate with the incumbent, and stop if it lost rows."""
+    ) -> dict[str, Any] | None:
+        """Compare the candidate with the incumbent, and stop if it lost rows.
+
+        Returns what the comparison found, so the promotion can be recorded
+        beside the evidence it was made on rather than as a bare fact.
+        """
         if kind != "model":
             raise CommandError(
                 "--check compares predictions, which needs a model. For an agent, "
@@ -137,7 +206,7 @@ class Command(BaseCommand):
             self.write(
                 self.style.dim(f"Nothing holds {stage!r} yet, so there is nothing to compare with.")
             )
-            return
+            return None
         if incumbent.version == version:
             raise CommandError(f"v{version} already holds {stage!r}.")
 
@@ -171,9 +240,10 @@ class Command(BaseCommand):
             )
 
         broke = report.get("broke", report.get("further", 0))
+        evidence = _evidence(report, incumbent.version, options["check"])
         if not broke:
             self.ok(f"v{version} keeps everything v{incumbent.version} got right.")
-            return
+            return evidence
 
         stats = report.get("significance") or {}
         if options["check"] == "significant":
@@ -187,7 +257,7 @@ class Command(BaseCommand):
             # glueing the verdict to a clause of mine produced "not a significant
             # regression: a real improvement", which reads like a contradiction.
             self.write(f"  verdict        {stats.get('verdict', '')}")
-            return
+            return evidence
 
         raise CommandError(
             f"Refusing to promote: v{version} is wrong on {broke} row(s) that "
@@ -210,3 +280,52 @@ class Command(BaseCommand):
             self.write(f"  {key:<14} {left:.4f} → {right:.4f}   {metrics['delta']:+.4f}")
         self.write(f"  fixed          {report.get('fixed', 0)} row(s)")
         self.write(f"  broke          {report.get('broke', 0)} row(s)")
+
+
+def _evidence(report: dict[str, Any], against: int, mode: str) -> dict[str, Any]:
+    """What the comparison found, small enough to keep on the move forever.
+
+    Deliberately not the whole report: the rows it disagreed on are large, and
+    they can be recomputed from two versions that both still exist. The counts
+    and the verdict cannot be recomputed once the dataset has moved on, which is
+    exactly why they are the part worth storing.
+    """
+    metrics = report.get("metrics") or {}
+    key = metrics.get("key", "")
+    stats = report.get("significance") or {}
+    return {
+        "against": against,
+        "mode": mode,
+        "rows": report.get("rows"),
+        "dataset": report.get("dataset"),
+        "metric": key,
+        "before": metrics.get("left", {}).get(key),
+        "after": metrics.get("right", {}).get(key),
+        "delta": metrics.get("delta"),
+        "fixed": report.get("fixed", report.get("closer")),
+        "broke": report.get("broke", report.get("further")),
+        "verdict": stats.get("verdict"),
+    }
+
+
+def _evidence_line(move: Any) -> str:
+    """One column's worth of why.
+
+    A move nobody checked says so rather than showing a blank, because "we did
+    not look" is the single most useful thing a promotion log can tell you.
+    """
+    evidence = move.evidence or {}
+    if "superseded_by" in evidence:
+        return f"superseded by v{evidence['superseded_by']}"
+    if not evidence:
+        return move.notes or "not checked"
+
+    parts = []
+    fixed, broke = evidence.get("fixed"), evidence.get("broke")
+    if fixed is not None or broke is not None:
+        parts.append(f"{fixed or 0} fixed / {broke or 0} broke")
+    if evidence.get("metric") and evidence.get("delta") is not None:
+        parts.append(f"{evidence['metric']} {evidence['delta']:+.4f}")
+    if move.notes:
+        parts.append(move.notes)
+    return ", ".join(parts) or "checked"

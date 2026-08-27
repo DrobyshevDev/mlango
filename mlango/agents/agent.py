@@ -552,11 +552,22 @@ class Agent(Declarative):
         return next((v for v in cls.versions() if v.fingerprint == fingerprint), None)
 
     @classmethod
-    def promote(cls, version: int, stage: str = "production") -> Any:
-        """Move a version to a stage, demoting whatever held it."""
+    def promote(
+        cls,
+        version: int,
+        stage: str = "production",
+        *,
+        evidence: dict[str, Any] | None = None,
+        notes: str = "",
+    ) -> Any:
+        """Move a version to a stage, demoting whatever held it.
+
+        Logged the same way a model's promotion is — same table, same reasons.
+        """
         from sqlalchemy import select
 
         from mlango.core.exceptions import ImproperlyConfigured
+        from mlango.metastore.history import record_transition
         from mlango.metastore.models import AgentVersion, Stage
         from mlango.metastore.session import session_scope
 
@@ -573,12 +584,28 @@ class Agent(Declarative):
             if target is None:
                 raise LookupError(f"{cls._meta.label} has no version {version}.")
 
+            moves: list[tuple[AgentVersion, str, str]] = []
             if stage in (Stage.PRODUCTION, Stage.STAGING):
                 # One version per stage, or "production" stops meaning anything.
                 for row in rows:
                     if row.stage == stage and row is not target:
+                        moves.append((row, row.stage, Stage.ARCHIVED))
                         row.stage = Stage.ARCHIVED
+            if target.stage != stage:
+                moves.append((target, target.stage, stage))
             target.stage = stage
+
+            for row, was, now in moves:
+                record_transition(
+                    session,
+                    kind="agent",
+                    label=cls._meta.label,
+                    version=row.version,
+                    from_stage=was,
+                    to_stage=now,
+                    evidence=(evidence if row is target else {"superseded_by": target.version}),
+                    notes=notes if row is target else "",
+                )
             session.flush()
             return target
 

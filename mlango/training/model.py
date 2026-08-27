@@ -475,10 +475,24 @@ class Model(Declarative):
         return cls.load(stage=Stage.PRODUCTION)
 
     @classmethod
-    def promote(cls, version: int, stage: str = Stage.PRODUCTION) -> Any:
-        """Move a version to a stage, demoting whoever held it."""
+    def promote(
+        cls,
+        version: int,
+        stage: str = Stage.PRODUCTION,
+        *,
+        evidence: dict[str, Any] | None = None,
+        notes: str = "",
+    ) -> Any:
+        """Move a version to a stage, demoting whoever held it.
+
+        ``evidence`` is what the move was decided on — the counts and the
+        verdict from a comparison — recorded beside it, because a promotion
+        made on a comparison and one made on a hunch are indistinguishable a
+        month later unless the comparison was written down.
+        """
         from sqlalchemy import select
 
+        from mlango.metastore.history import record_transition
         from mlango.metastore.models import ModelVersion
         from mlango.metastore.session import session_scope
 
@@ -494,11 +508,34 @@ class Model(Declarative):
             target = next((r for r in rows if r.version == version), None)
             if target is None:
                 raise LookupError(f"{cls._meta.label} has no version {version}.")
+
+            moves: list[tuple[ModelVersion, str, str]] = []
             if stage in (Stage.PRODUCTION, Stage.STAGING):
                 for row in rows:
                     if row.stage == stage and row is not target:
+                        moves.append((row, row.stage, Stage.ARCHIVED))
                         row.stage = Stage.ARCHIVED
+            if target.stage != stage:
+                moves.append((target, target.stage, stage))
             target.stage = stage
+
+            # In the same transaction as the change itself, or the history is
+            # fiction. A move to the stage a version already holds records
+            # nothing: it did not happen.
+            for row, was, now in moves:
+                record_transition(
+                    session,
+                    kind="model",
+                    label=cls._meta.label,
+                    version=row.version,
+                    from_stage=was,
+                    to_stage=now,
+                    # A demotion is a consequence, not a decision: the evidence
+                    # belongs on the promotion that caused it, and what the
+                    # demoted row wants recorded is what displaced it.
+                    evidence=(evidence if row is target else {"superseded_by": target.version}),
+                    notes=notes if row is target else "",
+                )
             session.flush()
             return target
 
