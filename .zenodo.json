@@ -1,0 +1,39 @@
+{
+  "upload_type": "software",
+  "title": "mlango — a batteries-included framework for machine learning, analytics and LLM agents",
+  "description": "A framework applying Django's declarative philosophy to machine learning. Datasets, models, agents and evaluations are declared as classes; the framework runs, versions and records them, and generates an admin interface, a documented HTTP endpoint, a migration and a CLI target from the same declaration.",
+  "creators": [
+    {
+      "name": "Drobyshev, Denis",
+      "affiliation": "DrobyshevDev"
+    }
+  ],
+  "license": "mit",
+  "keywords": [
+    "machine-learning",
+    "mlops",
+    "framework",
+    "llm-agents",
+    "experiment-tracking",
+    "python"
+  ],
+  "access_right": "open",
+  "communities": [
+    {
+      "identifier": "drobyshevdev"
+    }
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/DrobyshevDev/mlango",
+      "relation": "isSupplementTo",
+      "resource_type": "software"
+    },
+    {
+      "identifier": "https://drobyshevdev.github.io/mlango/",
+      "relation": "isDocumentedBy",
+      "resource_type": "publication-softwaredocumentation"
+    }
+  ],
+  "language": "eng"
+}
