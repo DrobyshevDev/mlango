@@ -61,6 +61,12 @@ jobs:
     name: Build distributions
     needs: verify
     runs-on: ubuntu-latest
+    permissions:
+      # The attestation has to be produced by the job that did the building. A
+      # later job holding the same artefact can only attest that it downloaded
+      # it, which is not the claim anyone wants to verify.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -117,6 +123,20 @@ jobs:
           cd /tmp
           /tmp/fresh/bin/mlango startplugin mlango-smoke --kind trainer
           test -f mlango-smoke/pyproject.toml
+
+      # The release already carries the distributions; what it did not carry was
+      # anything tying them to the run that produced them. attest-build-provenance
+      # signs a SLSA statement naming this repository, this workflow and this
+      # commit as the builder:
+      #
+      #   gh attestation verify <file> --repo DrobyshevDev/mlango
+      #
+      # PyPI-side PEP 740 attestations are unchanged; gh-action-pypi-publish
+      # produces those by default under Trusted Publishing.
+      - name: Attest the build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: "dist/*"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
