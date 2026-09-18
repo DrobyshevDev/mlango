@@ -7,6 +7,7 @@
 [![CI](https://github.com/DrobyshevDev/mlango/actions/workflows/ci.yml/badge.svg)](https://github.com/DrobyshevDev/mlango/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/DrobyshevDev/mlango/actions/workflows/codeql.yml/badge.svg)](https://github.com/DrobyshevDev/mlango/actions/workflows/codeql.yml)
 [![Coverage](https://codecov.io/gh/DrobyshevDev/mlango/branch/master/graph/badge.svg)](https://codecov.io/gh/DrobyshevDev/mlango)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/DrobyshevDev/mlango/badge)](https://scorecard.dev/viewer/?uri=github.com/DrobyshevDev/mlango)
 [![PyPI](https://img.shields.io/pypi/v/mlango)](https://pypi.org/project/mlango/)
 [![Python](https://img.shields.io/pypi/pyversions/mlango)](https://pypi.org/project/mlango/)
 [![License](https://img.shields.io/pypi/l/mlango)](https://opensource.org/licenses/MIT)
