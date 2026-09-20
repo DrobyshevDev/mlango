@@ -12,6 +12,7 @@ mis-wired settings module would go unnoticed.
 from __future__ import annotations
 
 import json
+import re
 import sys
 
 import pytest
@@ -881,6 +882,51 @@ class TestDiff:
         assert f"demo.Sentiment v{good} → v{weak}" in out
         assert "agreement" in out
         assert "fixed" in out and "broke" in out
+
+    def test_it_still_prints_the_lines_the_readme_shows(self, two_versions, capsys):
+        """The README opens with a transcript of this command. Keep it a transcript.
+
+        Shapes, not figures: the sample's data is invented, but its labels and
+        its columns are the program's. A label renamed or a column rewidened
+        leaves the front page showing output the program stopped producing, and
+        nothing else here would notice -- the tests above assert that
+        "agreement" and "fixed" appear somewhere, which survives both.
+
+        The rest of the sample -- that its numbers follow from each other, and
+        that both READMEs show the same transcript -- is checked in
+        test_readme_session.py, which needs no fixtures at all.
+        """
+        from test_readme_session import ACCURACY_ROW, figures, session
+
+        good, weak = two_versions
+        assert run("diff", "demo.Sentiment", str(good), str(weak), "-n", "120") == 0
+        printed = capsys.readouterr().out
+
+        sample = session("README.md")
+        for label, value in figures(sample).items():
+            start = sample.index(f"  {label}")
+            column = sample.index(value, start) - sample.rindex(chr(10), 0, start) - 1
+            match = re.search(rf"^  {label}( +)\S", printed, re.M)
+            assert match, f"the program no longer prints a {label!r} line"
+            printed_column = len(label) + 2 + len(match.group(1))
+            assert printed_column == column, (
+                f"{label!r} puts its value at column {printed_column}, "
+                f"the README shows column {column}"
+            )
+
+        # The accuracy rows carry a version number rather than a label, and the
+        # versions under test are whatever this module's metastore is up to. So
+        # the spacing is compared and the version is not.
+        shown = ACCURACY_ROW.search(sample)
+        printed_row = ACCURACY_ROW.search(printed)
+        assert printed_row, "the program no longer prints a per-version accuracy row"
+        assert printed_row.groups() == shown.groups(), (
+            f"the accuracy row is spaced {printed_row.groups()}, the README shows {shown.groups()}"
+        )
+
+        assert "Against the labels" in printed, "the labelled-data block is gone"
+        for phrase in ("row(s) wrong in", "row(s) right in"):
+            assert phrase in printed, f"the program no longer says {phrase!r}"
 
     def test_json_carries_the_whole_report(self, two_versions, capsys):
         good, weak = two_versions
