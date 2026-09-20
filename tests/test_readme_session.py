@@ -41,6 +41,19 @@ SESSION = re.compile(r"```bash\n(\$ python manage\.py diff.*?)\n```", re.S)
 #: Every line of the sample that is "two spaces, a label, a value".
 LABELLED = re.compile(r"^  (\w+) {2,}(.*)$", re.M)
 
+#: The two accuracy rows are not labelled lines: `v1` and `v2` are the version
+#: numbers of that particular run, and a real run has whatever numbers its
+#: metastore is up to. Treating them as labels made the live check assert that
+#: the program prints a line starting "  v1", which is true only when the two
+#: versions under test happen to be 1 and 2 -- as they were on the laptop this
+#: was written on, and were not in CI. The fixture that trains them says as much
+#: in its own docstring; the shape of these rows is checked separately, by
+#: ACCURACY_ROW, which does not care which versions they are.
+VERSION = re.compile(r"^v\d+$")
+
+#: "  v1     accuracy     0.7700", with the version left open.
+ACCURACY_ROW = re.compile(r"^  v\d+( +)accuracy( +)[\d.]+", re.M)
+
 
 def session(name: str) -> str:
     found = SESSION.search((ROOT / name).read_text(encoding="utf-8"))
@@ -49,7 +62,8 @@ def session(name: str) -> str:
 
 
 def figures(text: str) -> dict[str, str]:
-    return dict(LABELLED.findall(text))
+    """The labelled lines of the sample, without the per-run version rows."""
+    return {label: value for label, value in LABELLED.findall(text) if not VERSION.match(label)}
 
 
 def test_the_two_readmes_show_the_same_session() -> None:

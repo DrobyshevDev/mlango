@@ -896,7 +896,7 @@ class TestDiff:
         that both READMEs show the same transcript -- is checked in
         test_readme_session.py, which needs no fixtures at all.
         """
-        from test_readme_session import figures, session
+        from test_readme_session import ACCURACY_ROW, figures, session
 
         good, weak = two_versions
         assert run("diff", "demo.Sentiment", str(good), str(weak), "-n", "120") == 0
@@ -913,6 +913,16 @@ class TestDiff:
                 f"{label!r} puts its value at column {printed_column}, "
                 f"the README shows column {column}"
             )
+
+        # The accuracy rows carry a version number rather than a label, and the
+        # versions under test are whatever this module's metastore is up to. So
+        # the spacing is compared and the version is not.
+        shown = ACCURACY_ROW.search(sample)
+        printed_row = ACCURACY_ROW.search(printed)
+        assert printed_row, "the program no longer prints a per-version accuracy row"
+        assert printed_row.groups() == shown.groups(), (
+            f"the accuracy row is spaced {printed_row.groups()}, the README shows {shown.groups()}"
+        )
 
         assert "Against the labels" in printed, "the labelled-data block is gone"
         for phrase in ("row(s) wrong in", "row(s) right in"):
