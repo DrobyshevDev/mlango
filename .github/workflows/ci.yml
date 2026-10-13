@@ -103,7 +103,7 @@ jobs:
           files: coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: ${{ secrets.CODECOV_TOKEN != '' }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: coverage-xml
@@ -349,7 +349,7 @@ jobs:
           /tmp/fresh/bin/python -c "import mlango; print(mlango.get_version())"
           # py.typed has to ship, or the annotations are invisible downstream.
           /tmp/fresh/bin/python -c "import importlib.resources as r, mlango; assert (r.files(mlango) / 'py.typed').is_file()"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dist
           path: dist/
