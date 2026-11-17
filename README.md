@@ -1,6 +1,6 @@
 # mlango
 
-**Know what your new model version broke — before you promote it.**
+Shows what a new model version broke before you promote it.
 
 *Read this in [Русский](https://github.com/DrobyshevDev/mlango/blob/master/README.ru.md).*
 

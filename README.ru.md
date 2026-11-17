@@ -1,6 +1,6 @@
 # mlango
 
-**Узнайте, что сломала новая версия модели, — до того как её промоутить.**
+Показывает, что сломала новая версия модели, до того как её выкатывать.
 
 *Read this in [English](https://github.com/DrobyshevDev/mlango/blob/master/README.md).*
 
